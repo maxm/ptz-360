@@ -965,9 +965,48 @@ class Ptz360Card extends HTMLElement {
   // The camera's picture of a reported pose, and where to send it for its picture to be at a pose: the offset learnt
   // between the two (per turning way: the gears' play).
   // And the picture's centre at that zoom (the lens's optical centre moves as it zooms).
+  // And what's left of it, learnt here (`zoomFix`).
   shifted(pose, sign, way) {
-    const m = this.model, o = this.offset, [cy, cp] = m.centre(pose.zoom);
-    return { pan: m.pan(m.yaw(pose.pan) + sign * ((o.yaw[way] || 0) + cy)), tilt: m.tilt(m.pitch(pose.tilt) + sign * ((o.pitch[way] || 0) + cp)), zoom: pose.zoom };
+    const m = this.model, o = this.offset, [cy, cp] = m.centre(pose.zoom), [fy, fp] = this.zoomFix(pose.zoom);
+    return { pan: m.pan(m.yaw(pose.pan) + sign * ((o.yaw[way] || 0) + cy + fy)), tilt: m.tilt(m.pitch(pose.tilt) + sign * ((o.pitch[way] || 0) + cp + fp)), zoom: pose.zoom };
+  }
+
+  // The picture's centre drifts a little from what calibration measured (0.1–0.2° over hours on the first camera:
+  // at full zoom, 8% of the view). What's left at each of the model's zooms, [yaw, pitch] degrees, learnt from zooms
+  // that began at a confirmed place: linear between the zooms learnt (none at the widest: the offset is that),
+  // held past the last.
+  zoomFix(z) {
+    const m = this.model, learnt = this.offset.zoom || {}, points = [[m.zoom[0], [0, 0]]];
+    for (let i = 1; i < m.zoom.length; i++) if (learnt[i]?.length) points.push([m.zoom[i], median(learnt[i])]);
+    if (z <= points[0][0]) return [0, 0];
+    for (let k = 0; k < points.length - 1; k++) {
+      const [za, a] = points[k], [zb, b] = points[k + 1];
+      if (z <= zb) { const t = (z - za) / (zb - za); return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]; }
+    }
+    return points[points.length - 1][1];
+  }
+
+  // A zoom that began at a confirmed place, followed frame by frame: where it ended against where the camera says
+  // its picture is, a reading for the nearest of the model's zooms. Kept like the offset: the median of the last
+  // seven, none over 1.5°, and once there are three, one more than 0.75° from their median set aside.
+  learnZoom(start, end, camera) {
+    const m = this.model, fe = Math.log(m.focal(end.zoom));
+    if (Math.abs(fe - Math.log(m.focal(start.zoom))) < Math.log(1.5)) return;
+    // Mostly a zoom (turning far on the way, the frames drift more).
+    if (m.degreesBetween(start, end) > 0.5 * m.viewHfov(end.zoom) + 0.5) return;
+    let level = 0;
+    m.f.forEach((f, i) => { if (Math.abs(Math.log(f) - fe) < Math.abs(Math.log(m.f[level]) - fe)) level = i; });
+    if (level === 0) return;
+    const [fy, fp] = this.zoomFix(end.zoom);
+    const sample = [fy + m.yaw(end.pan) - m.yaw(camera.pan), fp + m.pitch(end.tilt) - m.pitch(camera.tilt)];
+    const o = this.offset;
+    o.zoom = o.zoom || {};
+    const kept = o.zoom[level] || [], med = median(kept);
+    if (Math.abs(sample[0]) > 1.5 || Math.abs(sample[1]) > 1.5) return;
+    if (kept.length >= 3 && (Math.abs(sample[0] - med[0]) > 0.75 || Math.abs(sample[1] - med[1]) > 0.75)) return;
+    kept.push(sample);
+    o.zoom[level] = kept.slice(-7);
+    try { localStorage.setItem(this.offsetKey, JSON.stringify(o)); } catch { /* not kept */ }
   }
   picture(pose, way) { return this.shifted(pose, 1, way ?? (this.target.pan >= this.livePose.pan ? 1 : -1)); }
   reported(pose) { return this.shifted(pose, -1, pose.pan >= this.camera.pan ? 1 : -1); }
@@ -1025,6 +1064,8 @@ class Ptz360Card extends HTMLElement {
   async follow() {
     if (this.tracking || !this.model) return;
     this.tracking = true;
+    // Started at a place the panorama confirmed (a zoom from there teaches `zoomFix`).
+    const confirmedStart = this.confirmed;
     this.confirmed = false;
     const move = ++this.move, startPose = this.livePose, m = this.model;
     // Whether the panorama confirmed any frame of this move.
@@ -1108,6 +1149,7 @@ class Ptz360Card extends HTMLElement {
     // camera says it is: its report (with the offset learnt) is good to a few tenths of a degree, frame to frame
     // tracking alone isn't.
     const painted = this.paintedPose || startPose, camera = { ...this.camera, pan: this.unwrap(this.camera.pan, painted.pan) };
+    if (confirmedStart) this.learnZoom(startPose, painted, camera);
     const settled = !pinned && m.degreesBetween(painted, camera) > 0.5 ? camera : painted;
     this.livePose = settled;
     this.glide(settled);
@@ -1144,7 +1186,8 @@ class Ptz360Card extends HTMLElement {
     const kept = o.samples[way] || [];
     const sample = [(o.yaw[way] || 0) + dy, (o.pitch[way] || 0) + dp], med = median(kept);
     // Never more than 3° either (a picture from before the camera stopped, a report not caught up): not an offset.
-    if (found.score >= 0.7 && Math.abs(sample[0]) < 3 && Math.abs(sample[1]) < 3
+    // And only at about the widest zoom: zoomed in, what's left is the zoom's (`zoomFix`), not the offset.
+    if (found.score >= 0.7 && m.focal(settled.zoom) < 1.3 * m.focal(m.zoom[0]) && Math.abs(sample[0]) < 3 && Math.abs(sample[1]) < 3
         && (kept.length < 3 || (Math.abs(sample[0] - med[0]) < 1.5 && Math.abs(sample[1] - med[1]) < 1.5))) {
       kept.push(sample);
       o.samples[way] = kept.slice(-7);
