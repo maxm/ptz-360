@@ -20,6 +20,7 @@ The integration does this once, in one pass (Calibrate in the card, or the Calib
    - the lens's radial distortion r(1 + k1 r² + k2 r⁴), with k1 / k2 per zoom;
    - a pan that covers a full turn wraps (`ap` = 360 / range).
    The fit's rms error (in pixels) is shown when it finishes. Well under 1 px is good.
+   Then **the picture's centre at each zoom**: on many PTZ cameras the lens's optical centre moves as it zooms. On the test camera, zoomed in, the picture is centred 1.2° right of and 0.4° below where the wide picture is: at full zoom that's 40% of the view. Each zoom's centre frame is drawn from the previous (wider) one through the model, and what's left over is how far its centre moved. The card adds it wherever it turns a camera position into its picture's.
 3. **Sweep.** The camera visits its whole range at the widest zoom, frames 0.6 of a frame apart.
 4. **Stitch.** The frames become one equirectangular picture (x = yaw, y = pitch, 12 px per degree) in the model's world. Each frame is placed by the model from its reported position, corrected by matching it against its neighbours (but kept within 0.3° of the report), then brightness is evened out and the frames are feathered together.
 
