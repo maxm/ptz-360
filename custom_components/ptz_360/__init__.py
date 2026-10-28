@@ -25,7 +25,7 @@ from .const import DOMAIN, STORAGE_VERSION
 from .device import PtzDevice, PtzError
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = [Platform.CAMERA]
+PLATFORMS = [Platform.BUTTON, Platform.CAMERA, Platform.SENSOR]
 SIGNAL_PROGRESS = f"{DOMAIN}_progress_{{}}"
 
 

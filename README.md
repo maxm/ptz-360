@@ -1,0 +1,43 @@
+# PTZ 360
+
+An ONVIF pan / tilt / zoom camera as a 360° view in your Home Assistant dashboard. Drag the picture to look around and pinch (or scroll) to zoom. The view moves at once over a panorama of everything the camera can see, and the camera follows. When it gets there, the live picture lands exactly where the view is.
+
+It's self-contained. You need the camera's ONVIF login, nothing else: no Frigate, no other camera integration.
+
+> Status: early proof of concept. Tested with one camera (a Dahua SD49225DB-HNY).
+
+## What it does
+
+- **Camera entity.** A camera entity streams the camera's RTSP feed, so Home Assistant's built-in WebRTC (go2rtc) plays it.
+- **One calibration pass** (a few minutes; the camera moves around and comes back):
+  1. Measures how far a frame spans at a few zooms.
+  2. Fits the camera's geometry: degrees per pan / tilt unit, the focal length at each zoom, and the lens's distortion.
+  3. Sweeps the whole range at the widest zoom and stitches it into one panorama.
+- **The `ptz-360-card` card:** draws the panorama and the live picture through the camera's lens model (WebGL). It finds every frame of a move in the one before (normalised correlation, in a Web Worker), checks it against the panorama, and finds frames again after the video stalls (it does). The panorama is repainted from what the camera has seen where it stopped, kept in your browser.
+
+## Install
+
+1. HACS → Integrations → ⋮ → Custom repositories → add `https://github.com/maxm/ptz-360` (Integration), then install **PTZ 360** and restart Home Assistant.
+2. Settings → Devices & services → Add integration → **PTZ 360**. Enter the camera's address, ONVIF port and login.
+3. Add the card to a dashboard:
+
+   ```yaml
+   type: custom:ptz-360-card
+   entity: camera.your_camera
+   ```
+
+4. The card offers to **Calibrate** (admins only). Let it run; the camera comes back to where it was.
+
+## Requirements
+
+- An ONVIF camera with absolute pan / tilt / zoom moves and position reporting.
+- Home Assistant 2025.1 or newer.
+- A browser with WebGL 2 (all current ones).
+
+## How it works
+
+`docs/findings.md` in [ptz-lab](https://github.com/maxm/ptz-lab) describes the approach, what was measured, and why the card does what it does (video stalls, the offset between the camera's reports and its picture, repainting only confirmed places).
+
+## Developing
+
+`dev/docker-compose.yml` runs a throwaway Home Assistant with the integration mounted. `dev/ha.py` and `dev/ws.py` call its REST and websocket APIs with a local test login (`dev/local-login.json`, not committed).

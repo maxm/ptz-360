@@ -515,6 +515,9 @@ const STYLE = `
   button:active { background: rgba(0,0,0,.8); }
   .badge { position: absolute; left: 10px; top: 10px; padding: 3px 9px; border-radius: 12px; background: rgba(0,0,0,.55); color: #fff; font: 600 11px system-ui, sans-serif; letter-spacing: .04em; }
   .notice { position: absolute; inset: auto 10px 10px 10px; padding: 8px 12px; border-radius: 10px; background: rgba(0,0,0,.65); color: #fff; font: 13px system-ui, sans-serif; display: flex; gap: 10px; align-items: center; }
+  .menu { position: absolute; right: 52px; top: 136px; background: rgba(0,0,0,.75); border-radius: 10px; padding: 4px; }
+  .menu button { width: auto; height: auto; padding: 8px 12px; border-radius: 8px; font: 13px system-ui, sans-serif; background: none; }
+  .menu button:hover { background: rgba(255,255,255,.12); }
   .notice button { width: auto; height: auto; padding: 6px 12px; border-radius: 8px; font-size: 13px; background: var(--primary-color, #03a9f4); }
 `;
 
@@ -550,7 +553,8 @@ class Ptz360Card extends HTMLElement {
     root.innerHTML = `<style>${STYLE}</style><ha-card><div class="stage">
       <canvas></canvas><video class="hidden" muted playsinline autoplay></video>
       <div class="badge">LIVE</div>
-      <div class="buttons"><button class="home" title="Home">⌂</button><button class="in" title="Zoom in">+</button><button class="out" title="Zoom out">−</button></div>
+      <div class="buttons"><button class="home" title="Home">⌂</button><button class="in" title="Zoom in">+</button><button class="out" title="Zoom out">−</button><button class="more" title="More" hidden>⋯</button></div>
+      <div class="menu" hidden><button class="recalibrate">Recalibrate…</button></div>
       <div class="notice" hidden></div></div></ha-card>`;
     this.stage = root.querySelector(".stage");
     this.canvas = root.querySelector("canvas");
@@ -560,6 +564,14 @@ class Ptz360Card extends HTMLElement {
     root.querySelector(".home").onclick = () => this.goHome();
     root.querySelector(".in").onclick = () => this.zoomBy(1.6);
     root.querySelector(".out").onclick = () => this.zoomBy(1 / 1.6);
+    // Admins: recalibrate (the camera moved, or the scene changed a lot).
+    const more = root.querySelector(".more"), menu = root.querySelector(".menu");
+    more.hidden = !this._hass.user?.is_admin;
+    more.onclick = () => { menu.hidden = !menu.hidden; };
+    root.querySelector(".recalibrate").onclick = () => {
+      menu.hidden = true;
+      if (confirm("Recalibrate? The camera moves around its whole range for several minutes, then comes back.")) this.calibrate();
+    };
     this.entity = this.config.entity;
     try {
       this.info = await this._hass.callWS({ type: "ptz_360/info", entity_id: this.entity });
@@ -574,6 +586,8 @@ class Ptz360Card extends HTMLElement {
       return;
     }
     this.setUp();
+    // A calibration started elsewhere (the device's Calibrate button, an automation): shown here as it goes.
+    this.followProgress();
   }
 
   stop() {
@@ -625,7 +639,8 @@ class Ptz360Card extends HTMLElement {
     const names = { starting: "Starting", measuring: "Measuring the zooms", "model frames": "Fitting the lens", fitting: "Fitting the lens",
       sweeping: "Sweeping the range", stitching: "Stitching the panorama" };
     this.progressSub = this._hass.connection.subscribeMessage((p) => {
-      if (p.stage === "done") { this.stop(); this.start(); return; }
+      if (p.stage === "done") { if (this.calibrating) { this.stop(); this.start(); } return; }
+      this.calibrating = true;
       if (p.stage === "error") { this.say(`Calibration failed: ${p.error}`, { label: "Again", run: () => this.calibrate() }); return; }
       this.say(`${names[p.stage] || p.stage}${p.total ? ` · ${p.done + 1} / ${p.total}` : ""}…`);
     }, { type: "ptz_360/subscribe_progress", entity_id: this.entity });

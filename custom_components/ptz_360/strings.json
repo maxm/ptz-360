@@ -4,10 +4,42 @@
       "user": {
         "title": "ONVIF PTZ camera",
         "description": "The camera's ONVIF address and login. It must be able to move to absolute positions.",
-        "data": {"host": "Host", "port": "ONVIF port", "username": "Username", "password": "Password"}
+        "data": {
+          "host": "Host",
+          "port": "ONVIF port",
+          "username": "Username",
+          "password": "Password"
+        }
       }
     },
-    "error": {"cannot_connect": "Couldn't reach the camera over ONVIF, or it can't pan / tilt / zoom."},
-    "abort": {"already_configured": "This camera is already set up."}
+    "error": {
+      "cannot_connect": "Couldn't reach the camera over ONVIF, or it can't pan / tilt / zoom."
+    },
+    "abort": {
+      "already_configured": "This camera is already set up."
+    }
+  },
+  "entity": {
+    "button": {
+      "calibrate": {
+        "name": "Calibrate"
+      }
+    },
+    "sensor": {
+      "calibration": {
+        "name": "Calibration",
+        "state": {
+          "idle": "Idle",
+          "starting": "Starting",
+          "measuring": "Measuring the zooms",
+          "model_frames": "Model frames",
+          "fitting": "Fitting the lens",
+          "sweeping": "Sweeping the range",
+          "stitching": "Stitching the panorama",
+          "done": "Done",
+          "error": "Failed"
+        }
+      }
+    }
   }
 }
