@@ -41,7 +41,7 @@ By default the picture comes from the stream the camera names over ONVIF, played
 
 ## How it works
 
-`docs/findings.md` in [ptz-lab](https://github.com/maxm/ptz-lab) describes the approach, what was measured, and why the card does what it does (video stalls, the offset between the camera's reports and its picture, repainting only confirmed places).
+[docs/how-it-works.md](docs/how-it-works.md) describes the approach, what was measured, and why the card does what it does (video stalls, the offset between the camera's reports and its picture, repainting only confirmed places).
 
 ## Developing
 
