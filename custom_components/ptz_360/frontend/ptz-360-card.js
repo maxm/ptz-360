@@ -1016,6 +1016,8 @@ class Ptz360Card extends HTMLElement {
     this.tracking = true;
     this.confirmed = false;
     const move = ++this.move, startPose = this.livePose, m = this.model;
+    // Whether the panorama confirmed any frame of this move.
+    let pinned = false;
     try {
       let frame = this.grab(), seen = frame.number;
       let anchor = { straight: await this.ask("straighten", { gray: frame.gray, zoom: startPose.zoom }), pose: startPose };
@@ -1058,6 +1060,7 @@ class Ptz360Card extends HTMLElement {
               anchor = { straight: r.straight, pose: raw };
               placed = { scale: 1, dx: 0, dy: 0 };
               locked = true;
+              pinned = true;
               unconfirmed = false;
             }
           }
@@ -1073,7 +1076,7 @@ class Ptz360Card extends HTMLElement {
           failures++;
           let found = null;
           if (failures >= 4 || (failures === 1 && gap > 300)) found = await this.ask("relocalize", { gray: frame.gray, candidates: [this.camera, last || this.camera] });
-          if (found) { pose = { ...found.pose, pan: this.unwrap(found.pose.pan, this.camera.pan) }; unconfirmed = false; anchor = { straight: found.straight, pose }; }
+          if (found) { pose = { ...found.pose, pan: this.unwrap(found.pose.pan, this.camera.pan) }; unconfirmed = false; pinned = true; anchor = { straight: found.straight, pose }; }
           else if (failures < 4) continue;
           else { pose = this.camera; unconfirmed = true; anchor = { straight: await this.ask("straighten", { gray: frame.gray, zoom: pose.zoom }), pose }; }
           placed = { scale: 1, dx: 0, dy: 0 };
@@ -1089,8 +1092,12 @@ class Ptz360Card extends HTMLElement {
       this.tracking = false;
       this.following = false;
     }
-    // Settled: the live video takes over where the last frame was; the view glides onto it.
-    const settled = this.paintedPose || startPose;
+    // Settled: the live video takes over where the last frame was; the view glides onto it. Unless the panorama never
+    // confirmed a frame of the move (the light changed since it was taken, say) and the frames drifted from where the
+    // camera says it is: its report (with the offset learnt) is good to a few tenths of a degree, frame to frame
+    // tracking alone isn't.
+    const painted = this.paintedPose || startPose, camera = { ...this.camera, pan: this.unwrap(this.camera.pan, painted.pan) };
+    const settled = !pinned && m.degreesBetween(painted, camera) > 0.5 ? camera : painted;
     this.livePose = settled;
     this.glide(settled);
     this.check(settled, this.target.pan >= startPose.pan ? 1 : -1, move);
