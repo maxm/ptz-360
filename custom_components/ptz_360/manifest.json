@@ -1,0 +1,14 @@
+{
+  "domain": "ptz_360",
+  "name": "PTZ 360",
+  "codeowners": ["@maxm"],
+  "config_flow": true,
+  "dependencies": ["camera", "ffmpeg", "frontend", "http", "websocket_api"],
+  "documentation": "https://github.com/maxm/ptz-360",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/maxm/ptz-360/issues",
+  "loggers": ["onvif", "zeep"],
+  "requirements": ["onvif-zeep-async>=3.1.12", "numpy>=1.26", "Pillow>=10.0"],
+  "version": "0.1.0"
+}

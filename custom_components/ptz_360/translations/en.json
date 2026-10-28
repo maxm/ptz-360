@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ONVIF PTZ camera",
+        "description": "The camera's ONVIF address and login. It must be able to move to absolute positions.",
+        "data": {"host": "Host", "port": "ONVIF port", "username": "Username", "password": "Password"}
+      }
+    },
+    "error": {"cannot_connect": "Couldn't reach the camera over ONVIF, or it can't pan / tilt / zoom."},
+    "abort": {"already_configured": "This camera is already set up."}
+  }
+}

@@ -1,0 +1,6 @@
+dev/config/
+__pycache__/
+*.pyc
+.DS_Store
+node_modules/
+local-login.json

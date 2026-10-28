@@ -1,0 +1,16 @@
+# A throwaway Home Assistant for developing PTZ 360: http://localhost:8123 (config in dev/config, not committed).
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: ptz360-dev
+    volumes:
+      - ./config:/config
+      - ../custom_components/ptz_360:/config/custom_components/ptz_360
+    ports:
+      - "8123:8123"
+      # go2rtc's WebRTC (UDP and TCP), for the live stream.
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+    environment:
+      - TZ=America/Montevideo
+    restart: unless-stopped
