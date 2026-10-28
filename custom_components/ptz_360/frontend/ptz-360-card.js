@@ -442,7 +442,8 @@ class View {
     gl.uniform4f(p.u.panoLayout, layout.yaw, layout.pitch, per, layout.wraps ? 1 : 0);
     this.liveUniforms(p, model, pose, liveAspect);
     gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    // The colour feathered in; the panorama stays opaque (a see-through border saved as JPEG comes back dark).
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
     // Around a wrapping panorama the frame may run past either end: drawn at both.
     const spans = [[cx - xr, cx + xr]];
     if (layout.wraps) spans.push([cx - xr - layout.width, cx + xr - layout.width], [cx - xr + layout.width, cx + xr + layout.width]);
@@ -465,6 +466,7 @@ class View {
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.panoTex, 0);
     const px = new Uint8ClampedArray(w * h * 4);
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    for (let i = 3; i < px.length; i += 4) px[i] = 255;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     const canvas = document.createElement("canvas");
     canvas.width = w;
@@ -500,6 +502,12 @@ const kept = {
       db.transaction("kv", "readwrite").objectStore("kv").put(value, key);
     } catch { /* not kept: fine */ }
   },
+  async delete(key) {
+    try {
+      const db = await this.open();
+      db.transaction("kv", "readwrite").objectStore("kv").delete(key);
+    } catch { /* fine */ }
+  },
 };
 
 // ─────────────────────────── the card ───────────────────────────
@@ -528,6 +536,7 @@ const STYLE = `
   .menu { display: flex; flex-direction: column; }
   .menu button { width: auto; height: auto; padding: 8px 12px; border-radius: 8px; font: 13px system-ui, sans-serif; background: none; }
   .menu button:hover { background: rgba(255,255,255,.12); }
+  .menu .about { padding: 6px 12px 8px; color: rgba(255,255,255,.6); font: 12px system-ui, sans-serif; }
   .notice button { width: auto; height: auto; padding: 6px 12px; border-radius: 8px; font-size: 13px; background: var(--primary-color, #03a9f4); }
 `;
 
@@ -564,7 +573,7 @@ class Ptz360Card extends HTMLElement {
       <canvas></canvas><video class="hidden" muted playsinline autoplay></video>
       <div class="badge">LIVE</div>
       <div class="buttons"><button class="home" title="Home">⌂</button><button class="in" title="Zoom in">+</button><button class="out" title="Zoom out">−</button><button class="more" title="More" hidden>⋯</button></div>
-      <div class="menu" hidden><button class="sethome">Set this view as home</button><button class="recalibrate">Recalibrate…</button></div>
+      <div class="menu" hidden><button class="sethome">Set this view as home</button><button class="recalibrate">Recalibrate…</button><div class="about"></div></div>
       <div class="notice" hidden></div></div></ha-card>`;
     this.stage = root.querySelector(".stage");
     this.canvas = root.querySelector("canvas");
@@ -579,7 +588,12 @@ class Ptz360Card extends HTMLElement {
     // Admins: recalibrate (the camera moved, or the scene changed a lot).
     const more = root.querySelector(".more"), menu = root.querySelector(".menu");
     more.hidden = !this._hass.user?.is_admin;
-    more.onclick = () => { menu.hidden = !menu.hidden; };
+    more.onclick = () => {
+      menu.hidden = !menu.hidden;
+      // What a bug report needs: where the picture comes from.
+      const video = !this.sourceReady() ? "connecting" : this.img ? "MJPEG" : "WebRTC";
+      menu.querySelector(".about").textContent = `Video: ${video}${this.videoEntity !== this.entity ? ` from ${this.videoEntity}` : ""}`;
+    };
     root.querySelector(".sethome").onclick = async () => {
       menu.hidden = true;
       // Where the camera is now (its reported pose): home from now on, for everyone.
@@ -752,7 +766,9 @@ class Ptz360Card extends HTMLElement {
 
   async loadPanorama() {
     const L = this.layout;
-    this.panoKey = `ptz-360-repaint-${this.info.entry_id}-${L.id}`;
+    // v2: repaints saved before the border was kept opaque have dark outlines baked in; they're dropped.
+    this.panoKey = `ptz-360-repaint-v2-${this.info.entry_id}-${L.id}`;
+    kept.delete(`ptz-360-repaint-${this.info.entry_id}-${L.id}`);
     try {
       const r = await fetch(`/api/ptz_360/${this.info.entry_id}/panorama/${L.id}.jpg`, { headers: { Authorization: `Bearer ${this._hass.auth.data.access_token}` } });
       const original = await createImageBitmap(await r.blob());
