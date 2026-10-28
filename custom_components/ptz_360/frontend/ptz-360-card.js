@@ -42,7 +42,7 @@ function worker() {
   const rad = Math.PI / 180;
   function rotation(yaw, pitch) {
     const y = yaw * rad, p = pitch * rad, cy = Math.cos(y), sy = Math.sin(y), cp = Math.cos(p), sp = Math.sin(p);
-    return [cy, sy * sp, sy * cp, 0, cp, -sp, -sy, cy * sp, cy * cp]; // Ry · Rx, row-major
+    return [cy, -sy * sp, sy * cp, 0, cp, sp, -sy, -cy * sp, cy * cp]; // Ry · Rx, row-major
   }
   const mul = (r, v) => [r[0] * v[0] + r[1] * v[1] + r[2] * v[2], r[3] * v[0] + r[4] * v[1] + r[5] * v[2], r[6] * v[0] + r[7] * v[1] + r[8] * v[2]];
   const angles = (d) => [Math.atan2(d[0], d[2]) / rad, Math.asin(Math.max(-1, Math.min(1, d[1] / Math.hypot(d[0], d[1], d[2])))) / rad];
@@ -254,7 +254,7 @@ class Model {
   rotation(pose) {
     const y = this.yaw(pose.pan) * Math.PI / 180, p = this.pitch(pose.tilt) * Math.PI / 180;
     const cy = Math.cos(y), sy = Math.sin(y), cp = Math.cos(p), sp = Math.sin(p);
-    return [cy, sy * sp, sy * cp, 0, cp, -sp, -sy, cy * sp, cy * cp];
+    return [cy, -sy * sp, sy * cp, 0, cp, sp, -sy, -cy * sp, cy * cp]; // Ry · Rx, row-major
   }
   direction(pose) { const r = this.rotation(pose); return [r[2], r[5], r[8]]; }
   degreesBetween(a, b) {
@@ -711,7 +711,7 @@ class Ptz360Card extends HTMLElement {
       // While still, the live video itself, where its picture was last found.
       const live = !this.following && this.sourceReady();
       if (live) this.view.setLive(this.source);
-      const showLive = live || this.following;
+      const showLive = live || (this.following && this.liveFrame);
       this.view.draw(this.model, this.target, this.layout, showLive, this.following ? this.paintedPose : this.livePose, this.videoAspect(), 0.7);
       this.badge.textContent = this.following ? "FOLLOWING" : live ? "LIVE" : "CONNECTING";
     };
@@ -1073,7 +1073,9 @@ class Ptz360Card extends HTMLElement {
 
   // The frame just grabbed, drawn at `pose` (the canvas is the live texture while following).
   paintFrame(pose) {
-    this.view.setLive(this.grabCanvas);
+    // No picture yet (the stream still starting): nothing to draw, the view moves over the panorama alone.
+    this.liveFrame = this.sourceReady();
+    if (this.liveFrame) this.view.setLive(this.grabCanvas);
     this.paintedPose = pose;
   }
 
