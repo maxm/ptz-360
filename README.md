@@ -33,6 +33,19 @@ It's self-contained. You need the camera's ONVIF login, nothing else: no Frigate
 
 By default the picture comes from the stream the camera names over ONVIF, played with Home Assistant's WebRTC (go2rtc). If WebRTC can't reach the camera, the card falls back to MJPEG. If another integration already shows this camera (Frigate, say), you can use its picture instead: Settings → Devices & services → PTZ 360 → **Configure** → *Video from another camera entity*. In the same dialog you can set a different RTSP address for the integration's own camera entity.
 
+## Testing
+
+PTZ 360 has only been tried on one camera so far, so reports from any other camera help, including "it just works". Please open a [camera report](https://github.com/maxm/ptz-360/issues/new?template=camera-report.yml) with:
+
+- the camera's make and model, and your Home Assistant version;
+- whether calibration finished, and its fit (the **Calibration** sensor's `fit_rms` attribute, in pixels; well under 1 is good);
+- where you used the card (desktop, the Home Assistant app on iPhone or Android, a phone browser) and which video it played (the card's ⋯ menu says WebRTC or MJPEG);
+- how well the live picture lands where the view is after a pan or a zoom. A short screen recording helps a lot.
+
+Before you start:
+- **Calibration moves the camera around its whole range** for about 15 minutes (it comes back where it was). Don't run it while you need the camera, and don't move the camera during it.
+- The learnt correction and the repainted panorama are kept per browser, so the first few pans on a new device can land a little off before it has learnt the correction.
+
 ## Requirements
 
 - An ONVIF camera with absolute pan / tilt / zoom moves and position reporting.

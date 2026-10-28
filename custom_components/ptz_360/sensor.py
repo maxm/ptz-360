@@ -1,5 +1,5 @@
 """Calibration: where a calibration is (idle, measuring, model frames, fitting, sweeping, stitching, done, error),
-with its step, its error, and when the camera was last calibrated."""
+with its step, its error, when the camera was last calibrated and how well its model fits."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -41,6 +41,9 @@ class CalibrationSensor(PtzEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         p = self._runtime.progress or {}
-        at = (self._runtime.data.get("calibration") or {}).get("at")
+        calibration = self._runtime.data.get("calibration") or {}
+        at, rms = calibration.get("at"), (calibration.get("model") or {}).get("rms")
         return {"step": p.get("done"), "steps": p.get("total"), "error": p.get("error"),
-                "calibrated": datetime.fromtimestamp(at, timezone.utc).isoformat() if at else None}
+                "calibrated": datetime.fromtimestamp(at, timezone.utc).isoformat() if at else None,
+                # How well the camera model fits (pixels; well under 1 is good).
+                "fit_rms": round(rms, 2) if rms is not None else None}

@@ -1,0 +1,67 @@
+name: Camera report
+description: How PTZ 360 worked (or didn't) with your camera. Reports that it works are just as useful.
+labels: ["camera report"]
+body:
+  - type: input
+    id: camera
+    attributes:
+      label: Camera
+      description: Make and model (Settings → Devices → the camera shows what it reports over ONVIF).
+      placeholder: Dahua SD49225DB-HNY
+    validations:
+      required: true
+  - type: input
+    id: ha
+    attributes:
+      label: Home Assistant version
+      placeholder: "2026.10.4"
+    validations:
+      required: true
+  - type: dropdown
+    id: calibration
+    attributes:
+      label: Did calibration finish?
+      options:
+        - "Yes"
+        - "No, it failed (paste the message below)"
+        - "Didn't run it"
+    validations:
+      required: true
+  - type: input
+    id: rms
+    attributes:
+      label: Calibration fit (rms, px)
+      description: Shown when calibration finishes, and in the Calibration sensor's attributes.
+      placeholder: "0.42"
+  - type: checkboxes
+    id: where
+    attributes:
+      label: Where you used the card
+      options:
+        - label: Desktop browser
+        - label: Home Assistant app on iPhone / iPad
+        - label: Home Assistant app on Android
+        - label: Phone browser
+  - type: dropdown
+    id: video
+    attributes:
+      label: Video
+      description: The card's ⋯ menu shows which one it's using.
+      options:
+        - WebRTC
+        - MJPEG (fallback)
+        - Another camera entity (e.g. Frigate)
+        - Don't know
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: How well the live picture lands where the view is after a pan, zoom, anything odd. A screen recording helps a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Anything from Settings → System → Logs mentioning ptz_360, and the browser console if the card misbehaves.
+      render: text
