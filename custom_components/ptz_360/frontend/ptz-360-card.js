@@ -213,7 +213,7 @@ function worker() {
       for (const c of m.candidates) {
         if (!pano) break;
         const [k1, k2] = lens(c.zoom), straight = straightened(m.gray, k1, k2), found = panoLocate(straight, c);
-        if (found) { result = { pose: found.pose, straight }; break; }
+        if (found) { result = { pose: found.pose, straight, score: found.score }; break; }
       }
     }
     postMessage({ id: m.id, result });
@@ -505,6 +505,12 @@ const kept = {
 // ─────────────────────────── the card ───────────────────────────
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// [yaw, pitch] medians of [yaw, pitch] samples.
+const median = (samples) => {
+  if (!samples.length) return [0, 0];
+  const mid = (v) => { const s = [...v].sort((a, b) => a - b), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
+  return [mid(samples.map((x) => x[0])), mid(samples.map((x) => x[1]))];
+};
 const STYLE = `
   ha-card { overflow: hidden; }
   .stage { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #111; touch-action: none; user-select: none; cursor: grab; }
@@ -1083,18 +1089,33 @@ class Ptz360Card extends HTMLElement {
   // camera's report teaches the offset; confirmed, the place may be repainted; off, the view and the live picture move
   // together (the picture stays put on screen).
   async check(settled, way, move) {
-    await sleep(400);
-    if (!this.alive || this.tracking || move !== this.move) return;
+    // A frame from after the camera stopped (the one on show may be from halfway, the video stalling). None within 2 s:
+    // nothing to check.
+    const stopped = this.frameNumber;
+    for (let waited = 0; this.frameNumber === stopped && waited < 2000; waited += 50) await sleep(50);
+    if (!this.alive || this.tracking || move !== this.move || this.frameNumber === stopped) return;
     const frame = this.grab();
     const found = await this.ask("relocalize", { gray: frame.gray, candidates: [settled, this.camera] });
     if (!found || this.tracking || move !== this.move) return;
     const m = this.model, pose = { ...found.pose, pan: this.unwrap(found.pose.pan, settled.pan) };
     const dp = m.pitch(pose.tilt) - m.pitch(this.camera.tilt), dy = m.yaw(this.unwrap(pose.pan, this.camera.pan)) - m.yaw(this.camera.pan);
-    if (Math.abs(dp) < 3 && Math.abs(dy) < 3) {
-      const o = this.offset;
-      if (o.pitch[-way] === undefined) { o.pitch[-way] = (o.pitch[way] || 0) + dp; o.yaw[-way] = (o.yaw[way] || 0) + dy; }
-      o.pitch[way] = (o.pitch[way] || 0) + dp * 0.7;
-      o.yaw[way] = (o.yaw[way] || 0) + dy * 0.7;
+    // One wrong match must not move the offset: only a confident one counts (a correlation of 0.7, well past the 0.55
+    // a match needs), the offset is the median of the last seven, and once there are three, one more than 1.5° from
+    // their median is set aside. (`camera` has the offset learnt so far in it: what was measured, whole.)
+    const o = this.offset;
+    o.samples = o.samples || {};
+    const kept = o.samples[way] || [];
+    const sample = [(o.yaw[way] || 0) + dy, (o.pitch[way] || 0) + dp], med = median(kept);
+    // Never more than 3° either (a picture from before the camera stopped, a report not caught up): not an offset.
+    if (found.score >= 0.7 && Math.abs(sample[0]) < 3 && Math.abs(sample[1]) < 3
+        && (kept.length < 3 || (Math.abs(sample[0] - med[0]) < 1.5 && Math.abs(sample[1] - med[1]) < 1.5))) {
+      kept.push(sample);
+      o.samples[way] = kept.slice(-7);
+      const now = median(o.samples[way]);
+      o.yaw[way] = now[0];
+      o.pitch[way] = now[1];
+      // A first answer for one way stands for the other too (most of the offset is the same).
+      if (!o.samples[-way]) { o.yaw[-way] = now[0]; o.pitch[-way] = now[1]; }
       try { localStorage.setItem(this.offsetKey, JSON.stringify(o)); } catch { /* not kept */ }
     }
     this.confirmed = true;
