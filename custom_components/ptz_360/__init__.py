@@ -21,7 +21,7 @@ from homeassistant.helpers.storage import Store
 
 from . import http, websocket
 from .calibrate import Calibration
-from .const import DOMAIN, STORAGE_VERSION
+from .const import CONF_STREAM_URL, CONF_VIDEO_ENTITY, DOMAIN, STORAGE_VERSION
 from .device import PtzDevice, PtzError
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,7 +48,8 @@ class PtzEntry:
 
     def info(self) -> dict[str, Any]:
         """What the card needs: ranges, the model, the panorama, home, and a calibration's progress."""
-        return {"entry_id": self.entry.entry_id, "ranges": self.device.ranges, "device": self.device.info,
+        return {"entry_id": self.entry.entry_id, "video_entity": self.entry.options.get(CONF_VIDEO_ENTITY),
+                "ranges": self.device.ranges, "device": self.device.info,
                 "calibration": self.data.get("calibration"), "panorama": self.data.get("panorama"),
                 "home": self.data.get("home"), "progress": self.progress}
 
@@ -111,7 +112,8 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: PtzConfigEntry) -> bool:
     d = entry.data
-    device = PtzDevice(hass, d[CONF_HOST], d[CONF_PORT], d[CONF_USERNAME], d[CONF_PASSWORD])
+    device = PtzDevice(hass, d[CONF_HOST], d[CONF_PORT], d[CONF_USERNAME], d[CONF_PASSWORD],
+                       stream_url=entry.options.get(CONF_STREAM_URL))
     try:
         await asyncio.wait_for(device.connect(), 20)
     except (PtzError, TimeoutError) as err:
@@ -120,6 +122,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: PtzConfigEntry) -> bool:
     await runtime.load()
     entry.runtime_data = runtime
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # New options (where the picture comes from): set up again.
+    entry.async_on_unload(entry.add_update_listener(lambda hass, entry: hass.config_entries.async_reload(entry.entry_id)))
     return True
 
 

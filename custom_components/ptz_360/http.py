@@ -2,6 +2,7 @@
 script (/ptz_360/ptz-360-card.js), added to every dashboard."""
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 
@@ -42,4 +43,9 @@ async def async_register(hass: HomeAssistant) -> None:
     hass.http.register_view(PanoramaView())
     card = os.path.join(os.path.dirname(__file__), "frontend", "ptz-360-card.js")
     await hass.http.async_register_static_paths([StaticPathConfig(CARD_URL, card, cache_headers=False)])
-    add_extra_js_url(hass, CARD_URL)
+
+    def version() -> str:
+        with open(card, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:10]
+    # A new card (an update) gets a new address: browsers don't keep showing the old one.
+    add_extra_js_url(hass, f"{CARD_URL}?v={await hass.async_add_executor_job(version)}")

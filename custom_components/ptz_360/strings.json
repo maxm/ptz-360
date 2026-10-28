@@ -41,5 +41,21 @@
         }
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Video",
+        "description": "Where the picture comes from. Leave both empty for the stream the camera names over ONVIF.",
+        "data": {
+          "video_entity": "Video from another camera entity",
+          "stream_url": "Stream address (RTSP)"
+        },
+        "data_description": {
+          "video_entity": "The same camera as another integration sees it, e.g. Frigate's camera (its WebRTC through Frigate's go2rtc). The card shows this entity's picture.",
+          "stream_url": "For this integration's own camera entity, instead of the one the camera names over ONVIF. Include the login if it needs one."
+        }
+      }
+    }
   }
 }

@@ -24,7 +24,8 @@ class PtzError(Exception):
 class PtzDevice:
     """The camera's ONVIF services, connected on first use (and again after a dropped connection)."""
 
-    def __init__(self, hass: HomeAssistant, host: str, port: int, username: str, password: str) -> None:
+    def __init__(self, hass: HomeAssistant, host: str, port: int, username: str, password: str,
+                 stream_url: str | None = None) -> None:
         self.hass = hass
         self.host, self.port, self.username, self.password = host, port, username, password
         self._lock = asyncio.Lock()
@@ -34,7 +35,8 @@ class PtzDevice:
         self._token: str | None = None
         self.ranges: dict[str, list[float]] = {"pan": [-1.0, 1.0], "tilt": [-1.0, 1.0], "zoom": [0.0, 1.0]}
         self.info: dict[str, str] = {}
-        self._stream_uri: str | None = None
+        # A stream address set in the options, else the one the camera names over ONVIF.
+        self._stream_uri: str | None = stream_url or None
         self._snapshot_uri: str | None = None
 
     async def connect(self) -> None:
@@ -145,7 +147,7 @@ class PtzDevice:
     def _with_login(self, uri: str) -> str:
         """`uri` with the camera's login in it (RTSP clients take it from the URL)."""
         parts = urlsplit(uri)
-        if parts.username:
+        if parts.username or not self.username:
             return uri
         login = f"{quote(self.username, safe='')}:{quote(self.password, safe='')}@"
         return urlunsplit((parts.scheme, login + parts.netloc, parts.path, parts.query, parts.fragment))

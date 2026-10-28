@@ -26,7 +26,12 @@ It's self-contained. You need the camera's ONVIF login, nothing else: no Frigate
    entity: camera.your_camera
    ```
 
-4. The card offers to **Calibrate** (admins only). Let it run; the camera comes back to where it was.
+4. The card offers to **Calibrate** (admins only). Let it run; the camera comes back to where it was. To run it again later, use the ⋯ menu in the card, or the camera's **Calibrate** button (Settings → Devices). The **Calibration** sensor shows how it's going.
+5. Optionally, ⋯ → **Set this view as home**: the home button goes there. Until you set one, it goes to the camera's own ONVIF home position.
+
+### Video
+
+By default the picture comes from the stream the camera names over ONVIF, played with Home Assistant's WebRTC (go2rtc). If WebRTC can't reach the camera, the card falls back to MJPEG. If another integration already shows this camera (Frigate, say), you can use its picture instead: Settings → Devices & services → PTZ 360 → **Configure** → *Video from another camera entity*. In the same dialog you can set a different RTSP address for the integration's own camera entity.
 
 ## Requirements
 
@@ -40,4 +45,4 @@ It's self-contained. You need the camera's ONVIF login, nothing else: no Frigate
 
 ## Developing
 
-`dev/docker-compose.yml` runs a throwaway Home Assistant with the integration mounted. `dev/ha.py` and `dev/ws.py` call its REST and websocket APIs with a local test login (`dev/local-login.json`, not committed).
+`dev/docker-compose.yml` runs a throwaway Home Assistant (on Docker Desktop for Mac, WebRTC can't reach the container, so the card uses the MJPEG fallback there) with the integration mounted. `dev/ha.py` and `dev/ws.py` call its REST and websocket APIs with a local test login (`dev/local-login.json`, not committed).

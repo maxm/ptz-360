@@ -3,6 +3,10 @@
 DOMAIN = "ptz_360"
 STORAGE_VERSION = 1
 
+# Options: where the picture comes from (config_flow.py).
+CONF_VIDEO_ENTITY = "video_entity"
+CONF_STREAM_URL = "stream_url"
+
 # The calibration pass (calibrate.py).
 # Zooms where a nudge measures how many pan / tilt units a frame spans (a first guess for the model fit).
 NUDGE_ZOOMS = (0.0, 0.25, 0.5, 0.75, 1.0)

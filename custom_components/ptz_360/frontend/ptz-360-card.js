@@ -278,7 +278,7 @@ precision highp float;
 in vec2 uv; out vec4 color;
 uniform float aspect;
 uniform mat3 viewR; uniform float viewF; uniform vec2 viewK;
-uniform sampler2D pano; uniform bool hasPano; uniform vec4 layout; uniform vec2 panoSize;
+uniform sampler2D pano; uniform bool hasPano; uniform vec4 panoLayout; uniform vec2 panoSize;
 uniform sampler2D live; uniform bool hasLive; uniform mat3 liveR; uniform float liveF; uniform vec2 liveK; uniform float liveAspect;
 uniform float grey;
 const float DEG = 57.29577951308232;
@@ -290,9 +290,9 @@ void main() {
   vec4 c = vec4(0.09, 0.09, 0.1, 1.0);
   if (hasPano) {
     float yaw = atan(ray.x, ray.z) * DEG, pitch = asin(clamp(ray.y, -1.0, 1.0)) * DEG;
-    float dx = yaw - layout.x;
-    if (layout.w > 0.5) dx = mod(dx, 360.0);
-    vec2 p = vec2(dx * layout.z, (layout.y - pitch) * layout.z) / panoSize;
+    float dx = yaw - panoLayout.x;
+    if (panoLayout.w > 0.5) dx = mod(dx, 360.0);
+    vec2 p = vec2(dx * panoLayout.z, (panoLayout.y - pitch) * panoLayout.z) / panoSize;
     if (p.x >= 0.0 && p.x <= 1.0 && p.y >= 0.0 && p.y <= 1.0) {
       vec3 t = texture(pano, p).rgb;
       c = vec4(mix(t, vec3(dot(t, vec3(0.299, 0.587, 0.114))), grey) * 0.85, 1.0);
@@ -305,7 +305,8 @@ void main() {
       float r2 = dot(l, l), d = 1.0 + liveK.x * r2 + liveK.y * r2 * r2;
       vec2 t = vec2(0.5 + l.x * d, 0.5 + l.y * d / liveAspect);
       float edge = min(min(t.x, 1.0 - t.x), min(t.y, 1.0 - t.y));
-      if (edge > 0.0) c = mix(c, texture(live, t), smoothstep(0.0, 0.006, edge));
+      // Past the picture (0.65 widths out) the lens's polynomial folds back onto it: not there.
+      if (edge > 0.0 && r2 < 0.42) c = mix(c, texture(live, t), smoothstep(0.0, 0.006, edge));
     }
   }
   color = c;
@@ -316,12 +317,12 @@ void main() {
 const PAINT = `#version 300 es
 precision highp float;
 in vec2 uv; out vec4 color;
-uniform vec4 layout; uniform vec4 rect;
+uniform vec4 panoLayout; uniform vec4 rect;
 uniform sampler2D live; uniform mat3 liveR; uniform float liveF; uniform vec2 liveK; uniform float liveAspect;
 const float RAD = 0.017453292519943295;
 void main() {
   vec2 px = mix(rect.xy, rect.zw, uv);
-  float yaw = (layout.x + px.x / layout.z) * RAD, pitch = (layout.y - px.y / layout.z) * RAD;
+  float yaw = (panoLayout.x + px.x / panoLayout.z) * RAD, pitch = (panoLayout.y - px.y / panoLayout.z) * RAD;
   vec3 ray = vec3(cos(pitch) * sin(yaw), sin(pitch), cos(pitch) * cos(yaw));
   vec3 q = transpose(liveR) * ray;
   if (q.z < 0.05) discard;
@@ -329,7 +330,7 @@ void main() {
   float r2 = dot(l, l), d = 1.0 + liveK.x * r2 + liveK.y * r2 * r2;
   vec2 t = vec2(0.5 + l.x * d, 0.5 + l.y * d / liveAspect);
   float edge = min(min(t.x - 0.03, 0.97 - t.x), min(t.y - 0.03, 0.88 - t.y));
-  if (edge <= 0.0) discard;
+  if (edge <= 0.0 || r2 > 0.42) discard;
   color = vec4(texture(live, t).rgb, min(1.0, edge / 0.04));
 }`;
 
@@ -413,7 +414,7 @@ class View {
     gl.uniform1f(p.u.grey, grey);
     gl.uniform1i(p.u.hasPano, this.hasPano && layout ? 1 : 0);
     if (layout) {
-      gl.uniform4f(p.u.layout, layout.yaw, layout.pitch, layout.px_per_degree, layout.wraps ? 1 : 0);
+      gl.uniform4f(p.u.panoLayout, layout.yaw, layout.pitch, layout.px_per_degree, layout.wraps ? 1 : 0);
       gl.uniform2f(p.u.panoSize, layout.width, layout.height);
     }
     gl.activeTexture(gl.TEXTURE0);
@@ -438,7 +439,7 @@ class View {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.panoTex, 0);
     gl.useProgram(p);
-    gl.uniform4f(p.u.layout, layout.yaw, layout.pitch, per, layout.wraps ? 1 : 0);
+    gl.uniform4f(p.u.panoLayout, layout.yaw, layout.pitch, per, layout.wraps ? 1 : 0);
     this.liveUniforms(p, model, pose, liveAspect);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -508,7 +509,9 @@ const STYLE = `
   ha-card { overflow: hidden; }
   .stage { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #111; touch-action: none; user-select: none; cursor: grab; }
   .stage.dragging { cursor: grabbing; }
-  canvas, video.plain { position: absolute; inset: 0; width: 100%; height: 100%; }
+  canvas, video.plain, img.plain { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  [hidden] { display: none !important; }
+  img.hidden { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
   video.hidden { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
   .buttons { position: absolute; right: 10px; top: 10px; display: flex; flex-direction: column; gap: 8px; }
   button { width: 34px; height: 34px; border-radius: 50%; border: none; background: rgba(0,0,0,.55); color: #fff; font-size: 17px; cursor: pointer; display: grid; place-items: center; }
@@ -516,6 +519,7 @@ const STYLE = `
   .badge { position: absolute; left: 10px; top: 10px; padding: 3px 9px; border-radius: 12px; background: rgba(0,0,0,.55); color: #fff; font: 600 11px system-ui, sans-serif; letter-spacing: .04em; }
   .notice { position: absolute; inset: auto 10px 10px 10px; padding: 8px 12px; border-radius: 10px; background: rgba(0,0,0,.65); color: #fff; font: 13px system-ui, sans-serif; display: flex; gap: 10px; align-items: center; }
   .menu { position: absolute; right: 52px; top: 136px; background: rgba(0,0,0,.75); border-radius: 10px; padding: 4px; }
+  .menu { display: flex; flex-direction: column; }
   .menu button { width: auto; height: auto; padding: 8px 12px; border-radius: 8px; font: 13px system-ui, sans-serif; background: none; }
   .menu button:hover { background: rgba(255,255,255,.12); }
   .notice button { width: auto; height: auto; padding: 6px 12px; border-radius: 8px; font-size: 13px; background: var(--primary-color, #03a9f4); }
@@ -554,11 +558,13 @@ class Ptz360Card extends HTMLElement {
       <canvas></canvas><video class="hidden" muted playsinline autoplay></video>
       <div class="badge">LIVE</div>
       <div class="buttons"><button class="home" title="Home">⌂</button><button class="in" title="Zoom in">+</button><button class="out" title="Zoom out">−</button><button class="more" title="More" hidden>⋯</button></div>
-      <div class="menu" hidden><button class="recalibrate">Recalibrate…</button></div>
+      <div class="menu" hidden><button class="sethome">Set this view as home</button><button class="recalibrate">Recalibrate…</button></div>
       <div class="notice" hidden></div></div></ha-card>`;
     this.stage = root.querySelector(".stage");
     this.canvas = root.querySelector("canvas");
     this.video = root.querySelector("video");
+    // The picture drawn and matched: the WebRTC video, or HA's MJPEG (an <img>) when WebRTC can't reach the camera.
+    this.source = this.video;
     this.badge = root.querySelector(".badge");
     this.notice = root.querySelector(".notice");
     root.querySelector(".home").onclick = () => this.goHome();
@@ -568,17 +574,33 @@ class Ptz360Card extends HTMLElement {
     const more = root.querySelector(".more"), menu = root.querySelector(".menu");
     more.hidden = !this._hass.user?.is_admin;
     more.onclick = () => { menu.hidden = !menu.hidden; };
+    root.querySelector(".sethome").onclick = async () => {
+      menu.hidden = true;
+      // Where the camera is now (its reported pose): home from now on, for everyone.
+      try { this.info.home = await this._hass.callWS({ type: "ptz_360/set_home", entity_id: this.entity }); this.say("Home set to this view."); setTimeout(() => this.say(""), 2500); }
+      catch (err) { this.say(`Set home: ${err.message || err}`); }
+    };
     root.querySelector(".recalibrate").onclick = () => {
       menu.hidden = true;
       if (confirm("Recalibrate? The camera moves around its whole range for several minutes, then comes back.")) this.calibrate();
     };
     this.entity = this.config.entity;
-    try {
-      this.info = await this._hass.callWS({ type: "ptz_360/info", entity_id: this.entity });
-    } catch (err) {
-      this.say(`${this.entity}: ${err.message || err}`);
-      return;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        this.info = await this._hass.callWS({ type: "ptz_360/info", entity_id: this.entity });
+        this.say("");
+        break;
+      } catch (err) {
+        // Home Assistant starting, the camera not set up yet: again in a while.
+        this.say(`${this.entity}: ${err.message || err}`);
+        if (!this.alive || attempt > 60) return;
+        await sleep(5000);
+        if (!this.alive) return;
+      }
     }
+    // The picture from another camera entity of the same camera (Frigate's, say: its WebRTC through its go2rtc): the
+    // card's own `video_entity`, else the integration's option, else the integration's camera.
+    this.videoEntity = this.config.video_entity || this.info.video_entity || this.entity;
     this.startVideo();
     if (!this.info.calibration || !this.info.panorama) {
       this.plainVideo();
@@ -613,7 +635,8 @@ class Ptz360Card extends HTMLElement {
 
   // Without a calibration: the plain video, and (for admins) the calibration pass.
   plainVideo() {
-    this.video.className = "plain";
+    this.plain = true;
+    this.source.className = "plain";
     this.canvas.hidden = true;
     this.stage.style.cursor = "default";
   }
@@ -680,20 +703,23 @@ class Ptz360Card extends HTMLElement {
     this.loadPanorama();
     const draw = () => {
       if (!this.alive) return;
+      this.raf = requestAnimationFrame(draw);
+      try { this.drawOnce(); } catch (err) { console.warn("ptz-360-card", err); }
+    };
+    this.drawOnce = () => {
       this.resize();
       // While still, the live video itself, where its picture was last found.
-      const live = !this.following && this.video.readyState >= 2;
-      if (live) this.view.setLive(this.video);
+      const live = !this.following && this.sourceReady();
+      if (live) this.view.setLive(this.source);
       const showLive = live || this.following;
       this.view.draw(this.model, this.target, this.layout, showLive, this.following ? this.paintedPose : this.livePose, this.videoAspect(), 0.7);
       this.badge.textContent = this.following ? "FOLLOWING" : live ? "LIVE" : "CONNECTING";
-      this.raf = requestAnimationFrame(draw);
     };
     draw();
     this.poll();
     // While the camera rests where the panorama confirmed, its live picture into the panorama now and then.
     this.repaintTimer = setInterval(() => {
-      if (this.alive && this.confirmed && !this.following && !this.tracking && this.video.readyState >= 2) this.repaint(this.livePose, true);
+      if (this.alive && this.confirmed && !this.following && !this.tracking && this.sourceReady()) this.repaint(this.livePose, true);
     }, 1500);
   }
 
@@ -703,7 +729,15 @@ class Ptz360Card extends HTMLElement {
     if (this.canvas.width !== w || this.canvas.height !== h) { this.canvas.width = w; this.canvas.height = h; }
   }
 
-  videoAspect() { return this.video.videoWidth ? this.video.videoHeight / this.video.videoWidth : 9 / 16; }
+  sourceSize() {
+    const s = this.source;
+    return s instanceof HTMLImageElement ? [s.naturalWidth, s.naturalHeight] : [s.videoWidth, s.videoHeight];
+  }
+  sourceReady() {
+    const s = this.source;
+    return s instanceof HTMLImageElement ? s.complete && s.naturalWidth > 0 : s.readyState >= 2;
+  }
+  videoAspect() { const [w, h] = this.sourceSize(); return w ? h / w : 9 / 16; }
 
   ask(kind, data) {
     const id = ++this.seq;
@@ -746,16 +780,17 @@ class Ptz360Card extends HTMLElement {
   async startVideo() {
     const hass = this._hass;
     try {
-      const config = await hass.callWS({ type: "camera/webrtc/get_client_config", entity_id: this.entity });
+      const config = await hass.callWS({ type: "camera/webrtc/get_client_config", entity_id: this.videoEntity });
       const pc = new RTCPeerConnection(config.configuration);
       this.pc = pc;
       pc.addTransceiver("video", { direction: "recvonly" });
+      pc.onconnectionstatechange = () => { if (pc.connectionState === "failed") this.mjpeg(); };
       pc.ontrack = (e) => { this.video.srcObject = e.streams[0] || new MediaStream([e.track]); this.video.play().catch(() => {}); };
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       let session = null;
       const waiting = [];
-      const send = (c) => hass.callWS({ type: "camera/webrtc/candidate", entity_id: this.entity, session_id: session, candidate: c }).catch(() => {});
+      const send = (c) => hass.callWS({ type: "camera/webrtc/candidate", entity_id: this.videoEntity, session_id: session, candidate: c }).catch(() => {});
       pc.onicecandidate = (e) => {
         if (!e.candidate) return;
         const c = { candidate: e.candidate.candidate, sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex };
@@ -766,32 +801,47 @@ class Ptz360Card extends HTMLElement {
         else if (m.type === "answer") pc.setRemoteDescription({ type: "answer", sdp: m.answer });
         else if (m.type === "candidate") pc.addIceCandidate(m.candidate).catch(() => {});
         else if (m.type === "error") this.mjpeg();
-      }, { type: "camera/webrtc/offer", entity_id: this.entity, offer: offer.sdp });
+      }, { type: "camera/webrtc/offer", entity_id: this.videoEntity, offer: offer.sdp });
       // No picture in a while: the camera's MJPEG through HA instead.
-      setTimeout(() => { if (this.alive && this.video.readyState < 2) this.mjpeg(); }, 12000);
+      setTimeout(() => { if (this.alive && !this.sourceReady()) this.mjpeg(); }, 12000);
     } catch {
       this.mjpeg();
     }
   }
 
-  // HA's MJPEG proxy as a fallback (an <img>; frames drawn from it).
+  // HA's MJPEG proxy as a fallback (an <img>, drawn and matched like the video).
   mjpeg() {
     if (this.img || !this.alive) return;
     this.pc?.close();
-    const token = this._hass.states[this.entity]?.attributes.access_token;
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.src = `/api/camera_proxy_stream/${this.entity}?token=${token}`;
+    const token = this._hass.states[this.videoEntity]?.attributes.access_token;
+    const img = document.createElement("img");
+    img.className = this.plain ? "plain" : "hidden";
+    img.src = `/api/camera_proxy_stream/${this.videoEntity}?token=${token}`;
+    this.video.replaceWith(img);
     this.img = img;
-    // The card treats it like the video element.
-    const fake = { get readyState() { return img.naturalWidth ? 4 : 0; }, get videoWidth() { return img.naturalWidth; }, get videoHeight() { return img.naturalHeight; } };
-    this.videoSource = img;
-    Object.defineProperty(this, "video", { value: Object.assign(fake, { className: "", play() {} }), writable: true });
+    this.source = img;
+    this.trackFrames();
   }
 
   // A number per new decoded frame.
   trackFrames() {
-    const v = this.video;
+    const v = this.source;
+    if (v instanceof HTMLImageElement) {
+      // An MJPEG <img> says nothing when a frame arrives: a few of its pixels sampled, a change is a new frame.
+      const probe = Object.assign(document.createElement("canvas"), { width: 16, height: 9 }).getContext("2d", { willReadFrequently: true });
+      let last = "";
+      const tick = () => {
+        if (!this.alive || this.source !== v) return;
+        if (this.sourceReady()) {
+          probe.drawImage(v, 0, 0, 16, 9);
+          const sig = probe.getImageData(0, 0, 16, 9).data.join(",");
+          if (sig !== last) { last = sig; this.frameNumber++; }
+        }
+        setTimeout(tick, 20);
+      };
+      tick();
+      return;
+    }
     if (v.requestVideoFrameCallback) {
       const next = (_, meta) => { this.frameNumber = meta.presentedFrames; if (this.alive) v.requestVideoFrameCallback(next); };
       v.requestVideoFrameCallback(next);
@@ -804,9 +854,8 @@ class Ptz360Card extends HTMLElement {
 
   // The frame on show now: in colour (for drawing) and grey 160×90 (for matching).
   grab() {
-    const src = this.videoSource || this.video;
     const g = this.grabCanvas.getContext("2d");
-    g.drawImage(src, 0, 0, this.grabCanvas.width, this.grabCanvas.height);
+    g.drawImage(this.source, 0, 0, this.grabCanvas.width, this.grabCanvas.height);
     const ctx = this.grayCanvas.getContext("2d", { willReadFrequently: true });
     ctx.drawImage(this.grabCanvas, 0, 0, GW, GH);
     const px = ctx.getImageData(0, 0, GW, GH).data, gray = new Float32Array(GW * GH);
@@ -1058,7 +1107,7 @@ class Ptz360Card extends HTMLElement {
 
   // The live picture at `pose` into the panorama (shown at once; kept in this browser now and then).
   repaint(pose, fromVideo) {
-    if (fromVideo) this.view.setLive(this.video); else this.view.setLive(this.grabCanvas);
+    this.view.setLive(fromVideo ? this.source : this.grabCanvas);
     this.view.paint(this.model, this.layout, pose, this.videoAspect());
     clearTimeout(this.keepTimer);
     this.keepTimer = setTimeout(() => {
