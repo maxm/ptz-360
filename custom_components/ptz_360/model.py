@@ -292,3 +292,85 @@ def fit(frames: list[tuple[list[float], bytes]], zoom_levels: list[float], first
     rms = float(np.sqrt((r * r).mean()))
     _LOGGER.warning("PTZ 360 model: %s, rms %.2f px of %d (%d matches)", model.as_dict(), rms, W, len(obs))
     return {**model.as_dict(), "rms": rms, "matches": int(len(obs)), "width": W}
+
+
+def centres(model: Model, frames: list[tuple[list[float], bytes]]) -> list[list[float]]:
+    """Where the picture's centre is at each of the model's zooms against the widest zoom's, [yaw, pitch] degrees:
+    the lens's optical centre moves as it zooms (on the first camera, 1.2° right and 0.4° down zoomed in: 40% of
+    the view at full zoom), and nothing else in the model sees it (the fit only matches frames at the same zoom).
+
+    From the calibration's frames at the centre pose, one per zoom: each zoom's frame against the one before it
+    (wider), that one drawn through the model into this one's pixels; what's left over is how far this zoom's
+    centre is from that one's."""
+    np = _np()
+    by_zoom: dict[float, list[tuple[list[float], bytes]]] = {}
+    for pose, jpeg in frames:
+        by_zoom.setdefault(round(pose[2], 3), []).append((pose, jpeg))
+    others = [p for z, fs in by_zoom.items() if z != round(model.zoom[0], 3) for p, _ in fs]
+    if not others:
+        return [[0.0, 0.0] for _ in model.zoom]
+    p0, t0 = float(np.median([p[0] for p in others])), float(np.median([p[1] for p in others]))
+
+    def nearest(z):
+        fs = by_zoom.get(round(z, 3))
+        if not fs:
+            return None
+        return min(fs, key=lambda f: abs(f[0][0] - p0) + abs(f[0][1] - t0))
+
+    py, px = np.mgrid[0:H, 0:W].astype(float)
+    # Away from the edges (and the overlays), windowed: phase correlation.
+    y0, y1, x0, x1 = int(H * 0.12), int(H * 0.86), int(W * 0.05), int(W * 0.95)
+    window = np.outer(np.hanning(y1 - y0), np.hanning(x1 - x0))
+
+    def shift(a, b):
+        a, b = a[y0:y1, x0:x1], b[y0:y1, x0:x1]
+        a, b = (a - a.mean()) * window, (b - b.mean()) * window
+        r = np.fft.fft2(b) * np.conj(np.fft.fft2(a))
+        r /= np.abs(r) + 1e-9
+        c = np.fft.ifft2(r).real
+        y, x = np.unravel_index(np.argmax(c), c.shape)
+        h, w = c.shape
+        # Sub-pixel: a parabola through the peak's neighbours.
+        def sub(m, l, rr):
+            d = l - 2 * m + rr
+            return 0.0 if d == 0 else 0.5 * (l - rr) / d
+        dx = x + sub(c[y, x], c[y, (x - 1) % w], c[y, (x + 1) % w])
+        dy = y + sub(c[y, x], c[(y - 1) % h, x], c[(y + 1) % h, x])
+        if dy > h / 2:
+            dy -= h
+        if dx > w / 2:
+            dx -= w
+        clarity = float((c.max() - c.mean()) / (c.std() + 1e-9))
+        return dx, dy, clarity
+
+    def corrected(pose, c):
+        return [pose[0] + c[0] / model.ap, pose[1] + c[1] / model.at, pose[2]]
+
+    out = [[0.0, 0.0]]
+    previous = nearest(model.zoom[0])
+    for z in model.zoom[1:]:
+        here = nearest(z)
+        if previous is None or here is None:
+            out.append(list(out[-1]))
+            continue
+        a, b = gray(previous[1]), gray(here[1])
+        c = list(out[-1])
+        clarity = 0.0
+        # Twice: drawn with the centre found, what's left is under a pixel.
+        for _ in range(2):
+            rays = model.rays(px, py, corrected(here[0], c))
+            sx, sy = model.project(rays, corrected(previous[0], out[-1]))
+            ix, iy = np.clip(np.round(sx).astype(int), 0, W - 1), np.clip(np.round(sy).astype(int), 0, H - 1)
+            drawn = a[iy, ix]
+            dx, dy, clarity = shift(drawn, b)
+            # The picture moved by (dx, dy) against where the model drew it: the camera looks the other way.
+            f = model.focal(z)
+            c = [c[0] - float(np.degrees(np.arctan(dx / (W * f)))), c[1] + float(np.degrees(np.arctan(dy / (W * f))))]
+        if clarity < 8:
+            _LOGGER.warning("PTZ 360 model: centre at zoom %.3f unclear (%.1f); kept the one before", z, clarity)
+            c = list(out[-1])
+        out.append(c)
+        previous = here
+    _LOGGER.warning("PTZ 360 model: picture centre per zoom (yaw, pitch °): %s",
+                    ", ".join(f"{z:.3f}: {c[0]:+.2f} {c[1]:+.2f}" for z, c in zip(model.zoom, out)))
+    return [[round(v, 4) for v in c] for c in out]

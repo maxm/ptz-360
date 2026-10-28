@@ -237,6 +237,14 @@ class Model {
     if (!a.length) return [this.k1 || 0, this.k2 || 0];
     return [a[i] + (a[i + 1] - a[i]) * t, b[i] + (b[i + 1] - b[i]) * t];
   }
+  // Where the picture's centre is at zoom `z` against the widest zoom's, [yaw, pitch] degrees (the lens's optical
+  // centre moves as it zooms), linear between the measured zooms, held past the ends.
+  centre(z) {
+    const c = this.centre_zoom;
+    if (!c || c.length !== this.zoom.length) return [0, 0];
+    const [i, t0] = this.seg(z), t = Math.max(0, Math.min(1, t0));
+    return [c[i][0] + (c[i + 1][0] - c[i][0]) * t, c[i][1] + (c[i + 1][1] - c[i][1]) * t];
+  }
   zoomForFocal(fc) {
     const target = Math.log(fc), zs = this.zoom, f = this.f;
     for (let i = 0; i < zs.length - 1; i++) {
@@ -712,7 +720,9 @@ class Ptz360Card extends HTMLElement {
     this.seq = 0;
     this.workerHandle.onmessage = (e) => { const r = this.pending.get(e.data.id); this.pending.delete(e.data.id); r?.(e.data.result); };
     this.ask("model", { model: info.calibration.model });
-    this.offsetKey = `ptz-360-offset-${this.entity}`;
+    // v2: offsets learnt before the picture's centre per zoom was known took in readings made zoomed in; dropped.
+    this.offsetKey = `ptz-360-offset-v2-${this.entity}`;
+    try { localStorage.removeItem(`ptz-360-offset-${this.entity}`); } catch { /* fine */ }
     this.offset = { pitch: {}, yaw: {} };
     try { Object.assign(this.offset, JSON.parse(localStorage.getItem(this.offsetKey)) || {}); } catch { /* none yet */ }
     const s = info.status;
@@ -954,9 +964,10 @@ class Ptz360Card extends HTMLElement {
 
   // The camera's picture of a reported pose, and where to send it for its picture to be at a pose: the offset learnt
   // between the two (per turning way: the gears' play).
+  // And the picture's centre at that zoom (the lens's optical centre moves as it zooms).
   shifted(pose, sign, way) {
-    const m = this.model, o = this.offset;
-    return { pan: m.pan(m.yaw(pose.pan) + sign * (o.yaw[way] || 0)), tilt: m.tilt(m.pitch(pose.tilt) + sign * (o.pitch[way] || 0)), zoom: pose.zoom };
+    const m = this.model, o = this.offset, [cy, cp] = m.centre(pose.zoom);
+    return { pan: m.pan(m.yaw(pose.pan) + sign * ((o.yaw[way] || 0) + cy)), tilt: m.tilt(m.pitch(pose.tilt) + sign * ((o.pitch[way] || 0) + cp)), zoom: pose.zoom };
   }
   picture(pose, way) { return this.shifted(pose, 1, way ?? (this.target.pan >= this.livePose.pan ? 1 : -1)); }
   reported(pose) { return this.shifted(pose, -1, pose.pan >= this.camera.pan ? 1 : -1); }

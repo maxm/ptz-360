@@ -21,7 +21,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 
 from . import http, websocket
-from .calibrate import Calibration
+from .calibrate import Calibration, centres_from_kept
 from .const import CONF_STREAM_URL, CONF_VIDEO_ENTITY, DOMAIN, STORAGE_VERSION
 from .device import PtzDevice, PtzError
 
@@ -43,6 +43,17 @@ class PtzEntry:
 
     async def load(self) -> None:
         self.data = (await self._store.async_load()) or {}
+        # Calibrated before the picture's centre per zoom was measured: from the frames it kept, once.
+        model = (self.data.get("calibration") or {}).get("model")
+        if model and "centre_zoom" not in model:
+            try:
+                centres = await self.hass.async_add_executor_job(centres_from_kept, self.folder, model)
+            except Exception:  # noqa: BLE001  (without it, zoomed in lands a little off, as before)
+                _LOGGER.exception("%s: measuring the picture centre per zoom", self.entry.title)
+                centres = None
+            if centres:
+                model["centre_zoom"] = centres
+                await self.save()
 
     async def save(self) -> None:
         await self._store.async_save(self.data)

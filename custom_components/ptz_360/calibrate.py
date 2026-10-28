@@ -64,6 +64,20 @@ def _shift(before: bytes, after: bytes) -> tuple[float, float, float]:
     return x / w, y / h, clarity
 
 
+def centres_from_kept(folder: str, model: dict[str, Any]) -> list[list[float]] | None:
+    """`model.centres` from the frames a calibration kept (a calibration from before the centres were measured)."""
+    path = os.path.join(folder, "calibration", "frames.json")
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        poses = json.load(f)["poses"]
+    frames = []
+    for k, pose in enumerate(poses):
+        with open(os.path.join(folder, "calibration", f"{k:02d}.jpg"), "rb") as f:
+            frames.append((pose, f.read()))
+    return ptz_model.centres(ptz_model.Model.from_dict(model), frames)
+
+
 def _small(jpeg: bytes, width: int = 1280) -> bytes:
     """A frame kept for the fit and the stitch: `width` wide, JPEG."""
     from PIL import Image  # noqa: PLC0415
@@ -195,6 +209,8 @@ class Calibration:
         await self.hass.async_add_executor_job(self._keep, "calibration", frames, {"levels": levels, "ap": ap})
         self._report("fitting")
         model = await self.hass.async_add_executor_job(ptz_model.fit, frames, list(levels), levels, ap)
+        # Where the picture's centre is at each zoom (the lens's optical centre moves as it zooms).
+        model["centre_zoom"] = await self.hass.async_add_executor_job(ptz_model.centres, ptz_model.Model.from_dict(model), frames)
         return model, ap
 
     async def _sweep(self, model: ptz_model.Model, ap: float | None) -> dict[str, Any]:
