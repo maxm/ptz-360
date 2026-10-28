@@ -46,6 +46,10 @@ Before you start:
 - **Calibration moves the camera around its whole range** for about 15 minutes (it comes back where it was). Don't run it while you need the camera, and don't move the camera during it.
 - The learnt correction and the repainted panorama are kept per browser, so the first few pans on a new device can land a little off before it has learnt the correction.
 
+## Troubleshooting
+
+- **"Custom element doesn't exist: ptz-360-card" (Configuration error) right after Home Assistant restarts:** the page loaded before the integration had added the card. Reload the page.
+
 ## Requirements
 
 - An ONVIF camera with absolute pan / tilt / zoom moves and position reporting.
