@@ -48,7 +48,7 @@ class PtzEntry:
 
     def info(self) -> dict[str, Any]:
         """What the card needs: ranges, the model, the panorama, home, and a calibration's progress."""
-        return {"ranges": self.device.ranges, "device": self.device.info,
+        return {"entry_id": self.entry.entry_id, "ranges": self.device.ranges, "device": self.device.info,
                 "calibration": self.data.get("calibration"), "panorama": self.data.get("panorama"),
                 "home": self.data.get("home"), "progress": self.progress}
 
