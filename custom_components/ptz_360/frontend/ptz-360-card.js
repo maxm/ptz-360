@@ -280,7 +280,7 @@ uniform float aspect;
 uniform mat3 viewR; uniform float viewF; uniform vec2 viewK;
 uniform sampler2D pano; uniform bool hasPano; uniform vec4 panoLayout; uniform vec2 panoSize;
 uniform sampler2D live; uniform bool hasLive; uniform mat3 liveR; uniform float liveF; uniform vec2 liveK; uniform float liveAspect;
-uniform float grey;
+uniform float grey; uniform bool liveSoft;
 const float DEG = 57.29577951308232;
 void main() {
   vec2 sd = vec2(uv.x - 0.5, (0.5 - uv.y) * aspect);
@@ -306,7 +306,9 @@ void main() {
       vec2 t = vec2(0.5 + l.x * d, 0.5 + l.y * d / liveAspect);
       float edge = min(min(t.x, 1.0 - t.x), min(t.y, 1.0 - t.y));
       // Past the picture (0.65 widths out) the lens's polynomial folds back onto it: not there.
-      if (edge > 0.0 && r2 < 0.42) c = mix(c, texture(live, t), smoothstep(0.0, 0.006, edge));
+      // Moving: the edge smoothed over about a screen pixel. Still: the picture fills the view to its edge, none.
+      float soft = liveSoft ? 1.5 * fwidth(edge) : 0.0;
+      if (edge > 0.0 && r2 < 0.42) c = mix(c, texture(live, t), soft > 0.0 ? smoothstep(0.0, soft, edge) : 1.0);
     }
   }
   color = c;
@@ -400,7 +402,7 @@ class View {
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
-  draw(model, view, layout, live, livePose, liveAspect, grey) {
+  draw(model, view, layout, live, livePose, liveAspect, grey, liveSoft) {
     const gl = this.gl, p = this.prog, c = this.canvas;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, c.width, c.height);
@@ -412,6 +414,7 @@ class View {
     gl.uniform1f(p.u.viewF, model.focal(view.zoom));
     gl.uniform2f(p.u.viewK, k1, k2);
     gl.uniform1f(p.u.grey, grey);
+    gl.uniform1i(p.u.liveSoft, liveSoft ? 1 : 0);
     gl.uniform1i(p.u.hasPano, this.hasPano && layout ? 1 : 0);
     if (layout) {
       gl.uniform4f(p.u.panoLayout, layout.yaw, layout.pitch, layout.px_per_degree, layout.wraps ? 1 : 0);
@@ -732,7 +735,7 @@ class Ptz360Card extends HTMLElement {
       const live = !this.following && this.sourceReady();
       if (live) this.view.setLive(this.source);
       const showLive = live || (this.following && this.liveFrame);
-      this.view.draw(this.model, this.target, this.layout, showLive, this.following ? this.paintedPose : this.livePose, this.videoAspect(), 0.7);
+      this.view.draw(this.model, this.target, this.layout, showLive, this.following ? this.paintedPose : this.livePose, this.videoAspect(), 0.7, !live);
       this.badge.textContent = this.following ? "FOLLOWING" : live ? "LIVE" : "CONNECTING";
     };
     draw();
