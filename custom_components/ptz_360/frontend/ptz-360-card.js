@@ -288,7 +288,7 @@ uniform float aspect;
 uniform mat3 viewR; uniform float viewF; uniform vec2 viewK;
 uniform sampler2D pano; uniform bool hasPano; uniform vec4 panoLayout; uniform vec2 panoSize;
 uniform sampler2D live; uniform bool hasLive; uniform mat3 liveR; uniform float liveF; uniform vec2 liveK; uniform float liveAspect;
-uniform float grey; uniform bool liveSoft;
+uniform float grey; uniform bool liveSoft; uniform float liveAlpha;
 const float DEG = 57.29577951308232;
 void main() {
   vec2 sd = vec2(uv.x - 0.5, (0.5 - uv.y) * aspect);
@@ -316,7 +316,7 @@ void main() {
       // Past the picture (0.65 widths out) the lens's polynomial folds back onto it: not there.
       // Moving: the edge smoothed over about a screen pixel. Still: the picture fills the view to its edge, none.
       float soft = liveSoft ? 1.5 * fwidth(edge) : 0.0;
-      if (edge > 0.0 && r2 < 0.42) c = mix(c, texture(live, t), soft > 0.0 ? smoothstep(0.0, soft, edge) : 1.0);
+      if (edge > 0.0 && r2 < 0.42) c = mix(c, texture(live, t), (soft > 0.0 ? smoothstep(0.0, soft, edge) : 1.0) * liveAlpha);
     }
   }
   color = c;
@@ -410,7 +410,7 @@ class View {
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
-  draw(model, view, layout, live, livePose, liveAspect, grey, liveSoft) {
+  draw(model, view, layout, live, livePose, liveAspect, grey, liveSoft, liveAlpha = 1) {
     const gl = this.gl, p = this.prog, c = this.canvas;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, c.width, c.height);
@@ -423,6 +423,7 @@ class View {
     gl.uniform2f(p.u.viewK, k1, k2);
     gl.uniform1f(p.u.grey, grey);
     gl.uniform1i(p.u.liveSoft, liveSoft ? 1 : 0);
+    gl.uniform1f(p.u.liveAlpha, liveAlpha);
     gl.uniform1i(p.u.hasPano, this.hasPano && layout ? 1 : 0);
     if (layout) {
       gl.uniform4f(p.u.panoLayout, layout.yaw, layout.pitch, layout.px_per_degree, layout.wraps ? 1 : 0);
@@ -524,6 +525,28 @@ const kept = {
 // ─────────────────────────── the card ───────────────────────────
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// How sharp a grey frame is: its mean gradient, away from the overlays (motion blur takes it down).
+const sharpness = (g) => {
+  let s = 0, n = 0;
+  for (let y = Math.round(GH * 0.1); y < Math.round(GH * 0.85); y++)
+    for (let x = 1; x < GW - 1; x++) { const i = y * GW + x; s += Math.abs(g[i + 1] - g[i - 1]) + Math.abs(g[i + GW] - g[i - GW]); n++; }
+  return s / n;
+};
+// How different two grey frames are: the mean absolute difference, away from the overlays (the clock ticks).
+const difference = (a, b) => {
+  let s = 0, n = 0;
+  for (let y = Math.round(GH * 0.1); y < Math.round(GH * 0.85); y++) for (let x = 0; x < GW; x++) { const i = y * GW + x; s += Math.abs(a[i] - b[i]); n++; }
+  return s / n;
+};
+// How colourful RGBA pixels are, 0–1 (an infrared picture at night is grey: about 0).
+const colourfulness = (px) => {
+  let s = 0, n = 0;
+  for (let i = 0; i < px.length; i += 16) { const hi = Math.max(px[i], px[i + 1], px[i + 2]), lo = Math.min(px[i], px[i + 1], px[i + 2]); s += (hi - lo) / (hi + 1); n++; }
+  return s / n;
+};
+// Infrared (night) below this colourfulness.
+const INFRARED = 0.06;
+
 // [yaw, pitch] medians of [yaw, pitch] samples.
 const median = (samples) => {
   if (!samples.length) return [0, 0];
@@ -547,11 +570,14 @@ const STYLE = `
   .menu { display: flex; flex-direction: column; }
   .menu button { width: auto; height: auto; padding: 8px 12px; border-radius: 8px; font: 13px system-ui, sans-serif; background: none; }
   .menu button:hover { background: rgba(255,255,255,.12); }
-  .menu .about { padding: 6px 12px 8px; color: rgba(255,255,255,.6); font: 12px system-ui, sans-serif; }
+  .menu .about { padding: 6px 12px 8px; color: rgba(255,255,255,.6); font: 12px system-ui, sans-serif; max-width: 260px; }
   .notice button { width: auto; height: auto; padding: 6px 12px; border-radius: 8px; font-size: 13px; background: var(--primary-color, #03a9f4); }
 `;
 
 class Ptz360Card extends HTMLElement {
+  // What the last moves did (how frames were placed, why a picture was or wasn't painted): the ⋯ menu and the console.
+  stats = {};
+
   setConfig(config) {
     if (!config || !config.entity) throw new Error("Set `entity` to a PTZ 360 camera");
     this.config = config;
@@ -603,7 +629,11 @@ class Ptz360Card extends HTMLElement {
       menu.hidden = !menu.hidden;
       // What a bug report needs: where the picture comes from.
       const video = !this.sourceReady() ? "connecting" : this.img ? "MJPEG" : "WebRTC";
-      menu.querySelector(".about").textContent = `Video: ${video}${this.videoEntity !== this.entity ? ` from ${this.videoEntity}` : ""}`;
+      const st = this.stats;
+      menu.querySelector(".about").textContent = `Video: ${video}${this.videoEntity !== this.entity ? ` from ${this.videoEntity}` : ""}${st.infrared ? " (infrared)" : ""}`
+        + ` · ${Math.round(this.delay)} ms behind the reports · tracking ${Math.round(100 * this.confidence)}%`
+        + (st.mode ? ` · last move: ${st.byFrames} frames found, ${st.byReports} by the reports, live view at the ${st.settledAt}` : "")
+        + (st.repaint ? ` · ${st.repaint}` : "");
     };
     root.querySelector(".sethome").onclick = async () => {
       menu.hidden = true;
@@ -724,6 +754,12 @@ class Ptz360Card extends HTMLElement {
     this.offsetKey = `ptz-360-offset-v2-${this.entity}`;
     try { localStorage.removeItem(`ptz-360-offset-${this.entity}`); } catch { /* fine */ }
     this.offset = { pitch: {}, yaw: {} };
+    // Following: how sure the frames are (0–1), placing them by the reports when they aren't, the video's delay
+    // behind the reports (ms), and how sharp the last still picture was. What happened, for the ⋯ menu and the console.
+    this.confidence = 1;
+    this.byReports = false;
+    this.delay = 300;
+    this.stillSharpness = 0;
     try { Object.assign(this.offset, JSON.parse(localStorage.getItem(this.offsetKey)) || {}); } catch { /* none yet */ }
     const s = info.status;
     const start = this.picture({ pan: s.pan, tilt: s.tilt, zoom: s.zoom }, 1);
@@ -745,14 +781,19 @@ class Ptz360Card extends HTMLElement {
       const live = !this.following && this.sourceReady();
       if (live) this.view.setLive(this.source);
       const showLive = live || (this.following && this.liveFrame);
-      this.view.draw(this.model, this.target, this.layout, showLive, this.following ? this.paintedPose : this.livePose, this.videoAspect(), 0.7, !live);
+      // Placed by the reports (the frames too blurry to find), the moving picture is faint: the panorama carries the move.
+      this.view.draw(this.model, this.target, this.layout, showLive, this.following ? this.paintedPose : this.livePose, this.videoAspect(), 0.7, !live,
+        this.following && this.byReports ? 0.35 : 1);
       this.badge.textContent = this.following ? "FOLLOWING" : live ? "LIVE" : "CONNECTING";
     };
     draw();
     this.poll();
     // While the camera rests where the panorama confirmed, its live picture into the panorama now and then.
     this.repaintTimer = setInterval(() => {
-      if (this.alive && this.confirmed && !this.following && !this.tracking && this.sourceReady()) this.repaint(this.livePose, true);
+      if (!this.alive || !this.confirmed || !this.paintable || this.following || this.tracking || !this.sourceReady()) return;
+      // The light may have changed since (dusk): the panorama's, or not painted.
+      if (this.grab().infrared !== this.panoInfrared) { this.paintable = false; this.stats.repaint = "not painted: the light changed"; return; }
+      this.repaint(this.livePose, true);
     }, 1500);
   }
 
@@ -803,6 +844,8 @@ class Ptz360Card extends HTMLElement {
       const ctx = c.getContext("2d", { willReadFrequently: true });
       ctx.drawImage(original, 0, 0, gw, gh);
       const px = ctx.getImageData(0, 0, gw, gh).data, gray = new Float32Array(gw * gh);
+      // Swept by day or at night (infrared): only pictures in the same light are painted into it.
+      this.panoInfrared = colourfulness(px) < INFRARED;
       for (let i = 0; i < gray.length; i++) gray[i] = 0.299 * px[4 * i] + 0.587 * px[4 * i + 1] + 0.114 * px[4 * i + 2];
       this.ask("pano", { pano: { gray, w: gw, h: gh, scale: gw / L.width, layout: L } });
     } catch (err) {
@@ -895,7 +938,9 @@ class Ptz360Card extends HTMLElement {
     ctx.drawImage(this.grabCanvas, 0, 0, GW, GH);
     const px = ctx.getImageData(0, 0, GW, GH).data, gray = new Float32Array(GW * GH);
     for (let i = 0; i < gray.length; i++) gray[i] = 0.299 * px[4 * i] + 0.587 * px[4 * i + 1] + 0.114 * px[4 * i + 2];
-    return { gray, number: this.frameNumber };
+    const infrared = colourfulness(px) < INFRARED;
+    this.stats.infrared = infrared;
+    return { gray, number: this.frameNumber, infrared };
   }
 
   // ── gestures ──
@@ -1067,9 +1112,12 @@ class Ptz360Card extends HTMLElement {
     // Started at a place the panorama confirmed (a zoom from there teaches `zoomFix`).
     const confirmedStart = this.confirmed;
     this.confirmed = false;
-    const move = ++this.move, startPose = this.livePose, m = this.model;
+    const move = ++this.move, startPose = this.livePose, m = this.model, began = Date.now(), startCamera = this.camera;
     // Whether the panorama confirmed any frame of this move.
     let pinned = false;
+    // For the stats and the video's delay: frames placed by finding them, by the reports; when the reports and the
+    // picture started moving.
+    let byFrames = 0, byReports = 0, reportsMoved = 0, pictureMoved = 0, blur = 1;
     try {
       let frame = this.grab(), seen = frame.number;
       let anchor = { straight: await this.ask("straighten", { gray: frame.gray, zoom: startPose.zoom }), pose: startPose };
@@ -1095,8 +1143,35 @@ class Ptz360Card extends HTMLElement {
         const r = await this.ask("locate", { gray: frame.gray, anchor: anchor.straight, anchorPose: anchor.pose, prior: placed, zooming });
         // Right after a stall the camera may have turned far: a weak match then is more likely wrong than right.
         const measured = r.found && !(gap > 300 && r.found.score < 0.5) ? r.found : null;
+        // The video's delay behind the reports: from when the reports started moving to when the picture did.
+        if (!reportsMoved) {
+          const h = this.history.find(([t, p]) => t >= began && m.degreesBetween(p, startCamera) > 0.05 * m.viewHfov(p.zoom) / 10);
+          if (h) reportsMoved = h[0];
+        }
+        if (!pictureMoved && measured && measured.score > 0.6 && (Math.hypot(measured.dx, measured.dy) > 1 || Math.abs(Math.log(measured.scale)) > 0.01)) {
+          pictureMoved = now;
+          if (reportsMoved && pictureMoved >= reportsMoved && pictureMoved - reportsMoved < 3000) this.delay = this.delay * 0.7 + (pictureMoved - reportsMoved) * 0.3;
+        }
+        // How sure the frames are: their match scores, less when blurred (against the last still picture), a miss
+        // none at all. Low (the night: long exposures blur every frame of a move), the frames are placed where the
+        // camera reported itself when they were taken instead; high again, back to finding them.
+        blur = this.stillSharpness ? Math.min(1, sharpness(frame.gray) / (0.6 * this.stillSharpness)) : 1;
+        this.confidence = this.confidence * 0.8 + (measured ? Math.max(0, measured.score) * blur : 0) * 0.2;
+        if (this.byReports ? this.confidence > 0.65 : this.confidence < 0.45) this.byReports = !this.byReports;
         let pose;
-        if (measured) {
+        if (this.byReports) {
+          const at = this.reportAt(now - this.delay);
+          pose = { ...at, pan: this.unwrap(at.pan, (last || anchor.pose).pan) };
+          // Found from here when the frames are clear again.
+          anchor = { straight: r.straight, pose };
+          placed = { scale: 1, dx: 0, dy: 0 };
+          const moving = !last || m.degreesBetween(pose, last) > 0.003 * m.viewHfov(pose.zoom) || Math.abs(Math.log(m.focal(pose.zoom) / m.focal(last.zoom))) > 0.003;
+          stillFrames = moving ? 0 : stillFrames + 1;
+          last = pose;
+          failures = 0;
+          byReports++;
+        } else if (measured) {
+          byFrames++;
           let raw = { ...r.pose, pan: this.unwrap(r.pose.pan, anchor.pose.pan) };
           placed = { scale: measured.scale, dx: measured.dx, dy: measured.dy };
           const far = measured.scale > 1.4 || measured.scale < 0.7 || Math.abs(measured.dx) > GW * 0.25 || Math.abs(measured.dy) > GH * 0.25;
@@ -1149,11 +1224,31 @@ class Ptz360Card extends HTMLElement {
     // camera says it is: its report (with the offset learnt) is good to a few tenths of a degree, frame to frame
     // tracking alone isn't.
     const painted = this.paintedPose || startPose, camera = { ...this.camera, pan: this.unwrap(this.camera.pan, painted.pan) };
-    if (confirmedStart) this.learnZoom(startPose, painted, camera);
-    const settled = !pinned && m.degreesBetween(painted, camera) > 0.5 ? camera : painted;
+    if (confirmedStart && !this.byReports) this.learnZoom(startPose, painted, camera);
+    // Placed by the reports at the end: where the camera says its picture is.
+    const settled = this.byReports || (!pinned && m.degreesBetween(painted, camera) > 0.5) ? camera : painted;
+    Object.assign(this.stats, { byFrames, byReports, confidence: this.confidence, delay: this.delay, mode: this.byReports ? "reports" : "frames",
+      blur, settledAt: this.byReports ? "report (frames not clear)" : settled === camera ? "report (frames drifted)" : "frames" });
+    console.info(`ptz-360 move: ${byFrames} frames placed by finding them, ${byReports} by the reports; confidence ${this.confidence.toFixed(2)}, ` +
+      `video ${Math.round(this.delay)} ms behind the reports${this.stats.infrared ? ", infrared" : ""}; live view at the ${this.stats.settledAt}`);
     this.livePose = settled;
     this.glide(settled);
     this.check(settled, this.target.pan >= startPose.pan ? 1 : -1, move);
+  }
+
+  // Where the camera reported its picture at time `t` (ms), between the polls.
+  reportAt(t) {
+    const h = this.history;
+    if (!h.length) return this.camera;
+    if (t <= h[0][0]) return h[0][1];
+    for (let k = h.length - 1; k > 0; k--) {
+      const [ta, a] = h[k - 1], [tb, b] = h[k];
+      if (t >= ta && t <= tb) {
+        const u = tb > ta ? (t - ta) / (tb - ta) : 1, m = this.model, pan = this.unwrap(b.pan, a.pan);
+        return { pan: a.pan + (pan - a.pan) * u, tilt: a.tilt + (b.tilt - a.tilt) * u, zoom: m.zoomForFocal(m.focal(a.zoom) * Math.pow(m.focal(b.zoom) / m.focal(a.zoom), u)) };
+      }
+    }
+    return h[h.length - 1][1];
   }
 
   // The frame just grabbed, drawn at `pose` (the canvas is the live texture while following).
@@ -1173,9 +1268,21 @@ class Ptz360Card extends HTMLElement {
     const stopped = this.frameNumber;
     for (let waited = 0; this.frameNumber === stopped && waited < 2000; waited += 50) await sleep(50);
     if (!this.alive || this.tracking || move !== this.move || this.frameNumber === stopped) return;
-    const frame = this.grab();
+    // And a picture at rest: a frame next to identical to the one before (the video lags the reports; a frame from
+    // halfway through the move is blurred). Not within 3 s: checked, but not painted.
+    let frame = this.grab(), still = false;
+    for (let waited = 0, number = frame.number; waited < 3000 && !still; waited += 50) {
+      await sleep(50);
+      if (this.tracking || move !== this.move) return;
+      if (this.frameNumber === number) continue;
+      const next = this.grab();
+      still = difference(frame.gray, next.gray) < 2.5;
+      frame = next;
+      number = next.number;
+    }
+    const sharp = sharpness(frame.gray);
     const found = await this.ask("relocalize", { gray: frame.gray, candidates: [settled, this.camera] });
-    if (!found || this.tracking || move !== this.move) return;
+    if (!found || this.tracking || move !== this.move) { this.stats.repaint = "not painted: not found in the panorama"; this.paintable = false; return; }
     const m = this.model, pose = { ...found.pose, pan: this.unwrap(found.pose.pan, settled.pan) };
     const dp = m.pitch(pose.tilt) - m.pitch(this.camera.tilt), dy = m.yaw(this.unwrap(pose.pan, this.camera.pan)) - m.yaw(this.camera.pan);
     // One wrong match must not move the offset: only a confident one counts (a correlation of 0.7, well past the 0.55
@@ -1205,7 +1312,16 @@ class Ptz360Card extends HTMLElement {
       this.sent = this.target;
       this.livePose = pose;
     }
-    this.repaint(this.livePose, false);
+    // Painted only a picture at rest, as sharp as still pictures here are, in the panorama's light (infrared at night
+    // over a day panorama would leave a patchwork).
+    const blurred = this.stillSharpness && sharp < 0.6 * this.stillSharpness;
+    if (still && !blurred) this.stillSharpness = this.stillSharpness ? this.stillSharpness * 0.8 + sharp * 0.2 : sharp;
+    const why = !still ? "the picture didn't come to rest" : blurred ? "blurred"
+      : frame.infrared !== this.panoInfrared ? (frame.infrared ? "a night picture over a day panorama" : "a day picture over a night panorama") : "";
+    this.paintable = !why;
+    this.stats.repaint = why ? `not painted: ${why}` : "painted";
+    console.info(`ptz-360 settle check: found ${m.degreesBetween(pose, settled).toFixed(2)}° from where the live view took over (score ${found.score.toFixed(2)}); ${this.stats.repaint}`);
+    if (!why) this.repaint(this.livePose, false);
   }
 
   // The live picture at `pose` into the panorama (shown at once; kept in this browser now and then).
