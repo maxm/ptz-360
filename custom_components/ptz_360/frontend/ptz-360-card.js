@@ -1378,6 +1378,14 @@ class Ptz360Card extends HTMLElement {
   }
 }
 
-customElements.define("ptz-360-card", Ptz360Card);
+// The integration adds this script to the page, and it can run before Home Assistant's frontend swaps in its own
+// element registry (a scoped-registry polyfill), which doesn't know elements defined before it: the dashboard then
+// says "Custom element doesn't exist". So define it again in whichever registry is current, for the first 30 s.
+const register = () => {
+  if (!customElements.get("ptz-360-card")) customElements.define("ptz-360-card", class extends Ptz360Card {});
+};
+register();
+const registering = setInterval(register, 100);
+setTimeout(() => clearInterval(registering), 30000);
 window.customCards = window.customCards || [];
 window.customCards.push({ type: "ptz-360-card", name: "PTZ 360", description: "An ONVIF PTZ camera as a 360° view: drag to look around." });
