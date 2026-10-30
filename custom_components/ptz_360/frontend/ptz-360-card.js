@@ -288,7 +288,7 @@ uniform float aspect;
 uniform mat3 viewR; uniform float viewF; uniform vec2 viewK;
 uniform sampler2D pano; uniform bool hasPano; uniform vec4 panoLayout; uniform vec2 panoSize;
 uniform sampler2D live; uniform bool hasLive; uniform mat3 liveR; uniform float liveF; uniform vec2 liveK; uniform float liveAspect;
-uniform float grey; uniform bool liveSoft; uniform float liveAlpha;
+uniform float grey; uniform bool liveSoft; uniform float liveAlpha; uniform bool liveDirect;
 const float DEG = 57.29577951308232;
 void main() {
   vec2 sd = vec2(uv.x - 0.5, (0.5 - uv.y) * aspect);
@@ -306,7 +306,12 @@ void main() {
       c = vec4(mix(t, vec3(dot(t, vec3(0.299, 0.587, 0.114))), grey) * 0.85, 1.0);
     }
   }
-  if (hasLive) {
+  if (hasLive && liveDirect) {
+    // The view where the picture was taken: each pixel is the picture's own, without the lens model's round trip,
+    // which can fold back before the picture's corners (a strongly fitted lens) and leave them out.
+    vec2 t = vec2(uv.x, 0.5 + sd.y / liveAspect);
+    if (t.y >= 0.0 && t.y <= 1.0) c = mix(c, texture(live, t), liveAlpha);
+  } else if (hasLive) {
     vec3 q = transpose(liveR) * ray;
     if (q.z > 0.05) {
       vec2 l = vec2(liveF * q.x / q.z, -liveF * q.y / q.z);
@@ -424,6 +429,10 @@ class View {
     gl.uniform1f(p.u.grey, grey);
     gl.uniform1i(p.u.liveSoft, liveSoft ? 1 : 0);
     gl.uniform1f(p.u.liveAlpha, liveAlpha);
+    // At rest, the view is where the live picture was taken (to rounding): the picture straight onto the screen.
+    const direct = live && !liveSoft && model.degreesBetween(view, livePose) < 0.01 &&
+      Math.abs(model.focal(view.zoom) / model.focal(livePose.zoom) - 1) < 1e-3;
+    gl.uniform1i(p.u.liveDirect, direct ? 1 : 0);
     gl.uniform1i(p.u.hasPano, this.hasPano && layout ? 1 : 0);
     if (layout) {
       gl.uniform4f(p.u.panoLayout, layout.yaw, layout.pitch, layout.px_per_degree, layout.wraps ? 1 : 0);
