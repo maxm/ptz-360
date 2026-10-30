@@ -6,6 +6,8 @@ It's self-contained. You need the camera's ONVIF login, nothing else: no Frigate
 
 > Status: early proof of concept. Tested with one camera (a Dahua SD49225DB-HNY).
 
+https://github.com/user-attachments/assets/5eab2ef0-d4ce-439b-9e58-cf69aaf8f102
+
 ## What it does
 
 - **Camera entity.** A camera entity streams the camera's RTSP feed, so Home Assistant's built-in WebRTC (go2rtc) plays it.
