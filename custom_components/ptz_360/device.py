@@ -78,16 +78,21 @@ class PtzDevice:
             except Exception as err:  # noqa: BLE001
                 raise PtzError(str(err) or type(err).__name__) from err
 
-    async def _call(self, fn):
-        try:
-            ptz, token = await self._services()
-            return await fn(ptz, token)
-        except PtzError:
-            raise
-        except Exception as err:  # noqa: BLE001
-            # A dropped connection: reconnect next time.
-            self._ptz = None
-            raise PtzError(str(err) or type(err).__name__) from err
+    async def _call(self, fn, attempts: int = 3):
+        # Cameras drop a request now and then ("Server disconnected"), which would end a calibration minutes in: a
+        # dropped call reconnects and is sent again (every call here is a position, a move to one, or a stop).
+        for attempt in range(attempts):
+            try:
+                ptz, token = await self._services()
+                return await fn(ptz, token)
+            except PtzError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                self._ptz = None
+                if attempt == attempts - 1:
+                    raise PtzError(str(err) or type(err).__name__) from err
+                _LOGGER.debug("%s: %s, sending again", self.host, err)
+                await asyncio.sleep(1)
 
     async def close(self) -> None:
         if self._cam is not None:
