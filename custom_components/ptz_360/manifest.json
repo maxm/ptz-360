@@ -10,5 +10,5 @@
   "issue_tracker": "https://github.com/maxm/ptz-360/issues",
   "loggers": ["onvif", "zeep"],
   "requirements": ["onvif-zeep-async>=3.1.12", "numpy>=1.26"],
-  "version": "0.1.0"
+  "version": "1"
 }
