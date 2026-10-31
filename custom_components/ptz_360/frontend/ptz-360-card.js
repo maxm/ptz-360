@@ -290,6 +290,17 @@ uniform sampler2D pano; uniform bool hasPano; uniform vec4 panoLayout; uniform v
 uniform sampler2D live; uniform bool hasLive; uniform mat3 liveR; uniform float liveF; uniform vec2 liveK; uniform float liveAspect;
 uniform float grey; uniform bool outlines; uniform bool liveSoft; uniform float liveAlpha; uniform bool liveDirect;
 const float DEG = 57.29577951308232;
+// How strong a brightness edge the panorama has at p (Sobel), in its copy at mip level L (2^L times smaller).
+float edge(vec2 p, float L) {
+  vec2 d = exp2(floor(L)) / vec2(textureSize(pano, 0));
+  const vec3 W = vec3(0.299, 0.587, 0.114);
+  float tl = dot(textureLod(pano, p + d * vec2(-1, -1), L).rgb, W), tc = dot(textureLod(pano, p + d * vec2(0, -1), L).rgb, W);
+  float tr = dot(textureLod(pano, p + d * vec2(1, -1), L).rgb, W), ml = dot(textureLod(pano, p + d * vec2(-1, 0), L).rgb, W);
+  float mr = dot(textureLod(pano, p + d * vec2(1, 0), L).rgb, W), bl = dot(textureLod(pano, p + d * vec2(-1, 1), L).rgb, W);
+  float bc = dot(textureLod(pano, p + d * vec2(0, 1), L).rgb, W), br = dot(textureLod(pano, p + d * vec2(1, 1), L).rgb, W);
+  float gx = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl), gy = (bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr);
+  return length(vec2(gx, gy));
+}
 void main() {
   vec2 sd = vec2(uv.x - 0.5, (0.5 - uv.y) * aspect);
   vec2 s = sd;
@@ -305,17 +316,13 @@ void main() {
       vec3 t = texture(pano, p).rgb;
       c = vec4(mix(t, vec3(dot(t, vec3(0.299, 0.587, 0.114))), grey) * 0.85, 1.0);
       if (outlines) {
-        // Only its outlines: the brightness gradient (Sobel, two of the panorama's pixels apart, past its JPEG grain),
-        // light lines on dark.
-        vec2 d = 2.0 / vec2(textureSize(pano, 0));
-        const vec3 W = vec3(0.299, 0.587, 0.114);
-        float tl = dot(texture(pano, p + d * vec2(-1, -1)).rgb, W), tc = dot(texture(pano, p + d * vec2(0, -1)).rgb, W);
-        float tr = dot(texture(pano, p + d * vec2(1, -1)).rgb, W), ml = dot(texture(pano, p + d * vec2(-1, 0)).rgb, W);
-        float mr = dot(texture(pano, p + d * vec2(1, 0)).rgb, W), bl = dot(texture(pano, p + d * vec2(-1, 1)).rgb, W);
-        float bc = dot(texture(pano, p + d * vec2(0, 1)).rgb, W), br = dot(texture(pano, p + d * vec2(1, 1)).rgb, W);
-        float gx = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl), gy = (bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr);
-        float line = smoothstep(0.25, 0.7, length(vec2(gx, gy)));
-        c = vec4(mix(vec3(0.08), mix(t, vec3(dot(t, W)), grey) * 0.6 + 0.4, line), 1.0);
+        // Only its outlines, light lines on dark: where it's sharp (thin lines, at about a screen pixel), and only
+        // where a copy blurred to a quarter of its size has an edge too, so leaves and grass (detail a few of its
+        // pixels across) fade and the shapes of things stay. Zoomed out further, both by as much again.
+        vec2 size = vec2(textureSize(pano, 0));
+        float scale = max(0.0, log2(max(fwidth(p.x * size.x), fwidth(p.y * size.y))));
+        float line = smoothstep(0.15, 0.45, edge(p, min(scale, 4.0))) * smoothstep(0.25, 0.5, edge(p, clamp(scale + 1.5, 2.0, 5.0)));
+        c = vec4(mix(vec3(0.08), mix(t, vec3(dot(t, vec3(0.299, 0.587, 0.114))), grey) * 0.6 + 0.4, line), 1.0);
       }
     }
   }
@@ -404,6 +411,9 @@ class View {
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.panoTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    // Its smaller copies too: outlines are found in a blurred one (see the shader), and zoomed out it's smoother.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.generateMipmap(gl.TEXTURE_2D);
     this.panoSize = [source.width, source.height];
     this.hasPano = true;
   }
@@ -494,6 +504,8 @@ class View {
     }
     gl.disable(gl.BLEND);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindTexture(gl.TEXTURE_2D, this.panoTex);
+    gl.generateMipmap(gl.TEXTURE_2D);
   }
   // The panorama texture's pixels, as a canvas (to keep it).
   readPanorama() {
