@@ -21,6 +21,10 @@ class PtzError(Exception):
     pass
 
 
+class NoPosition(PtzError):
+    """The camera's status has no position in it: it can't say where it is."""
+
+
 class PtzDevice:
     """The camera's ONVIF services, connected on first use (and again after a dropped connection)."""
 
@@ -35,6 +39,8 @@ class PtzDevice:
         self._token: str | None = None
         self.ranges: dict[str, list[float]] = {"pan": [-1.0, 1.0], "tilt": [-1.0, 1.0], "zoom": [0.0, 1.0]}
         self.info: dict[str, str] = {}
+        # Whether it moves to absolute positions, from its PTZ node (None: it didn't say).
+        self.absolute: bool | None = None
         # A stream address set in the options, else the one the camera names over ONVIF.
         self._stream_uri: str | None = stream_url or None
         self._snapshot_uri: str | None = None
@@ -42,6 +48,18 @@ class PtzDevice:
     async def connect(self) -> None:
         """Connects (or reuses the connection); raises PtzError when the camera can't be reached or can't pan."""
         await self._services()
+
+    async def check(self) -> str | None:
+        """What this camera lacks for PTZ 360 (`no_absolute`, `no_position`), or None: it must move to absolute
+        positions and report where it is. Doesn't move it."""
+        await self._services()
+        if self.absolute is False:
+            return "no_absolute"
+        try:
+            await self.status()
+        except NoPosition:
+            return "no_position"
+        return None
 
     async def _services(self):
         async with self._lock:
@@ -64,15 +82,20 @@ class PtzDevice:
                 profile = next((p for p in profiles if getattr(p, "PTZConfiguration", None)), profiles[0])
                 token = profile.token
                 try:
-                    for node in await ptz.GetNodes():
-                        spaces = node.SupportedPTZSpaces
-                        pt = spaces.AbsolutePanTiltPositionSpace[0]
-                        z = spaces.AbsoluteZoomPositionSpace[0]
-                        self.ranges = {"pan": [pt.XRange.Min, pt.XRange.Max], "tilt": [pt.YRange.Min, pt.YRange.Max],
-                                       "zoom": [z.XRange.Min, z.XRange.Max]}
-                        break
-                except Exception:  # noqa: BLE001  (the generic spaces are the default)
-                    pass
+                    nodes = await ptz.GetNodes()
+                except Exception:  # noqa: BLE001  (not known: the generic spaces are the default)
+                    nodes = None
+                if nodes:
+                    spaces = nodes[0].SupportedPTZSpaces
+                    pts = spaces.AbsolutePanTiltPositionSpace if spaces else None
+                    zs = spaces.AbsoluteZoomPositionSpace if spaces else None
+                    # Listing its spaces without absolute ones: the camera only moves by speed.
+                    self.absolute = bool(pts)
+                    if pts:
+                        self.ranges = {**self.ranges, "pan": [pts[0].XRange.Min, pts[0].XRange.Max],
+                                       "tilt": [pts[0].YRange.Min, pts[0].YRange.Max]}
+                    if zs:
+                        self.ranges = {**self.ranges, "zoom": [zs[0].XRange.Min, zs[0].XRange.Max]}
                 self._cam, self._ptz, self._media, self._token = cam, ptz, media, token
                 return ptz, token
             except Exception as err:  # noqa: BLE001
@@ -108,6 +131,8 @@ class PtzDevice:
         async def fn(ptz, token):
             s = await ptz.GetStatus({"ProfileToken": token})
             pos, move = s.Position, s.MoveStatus
+            if pos is None or pos.PanTilt is None:
+                raise NoPosition("the camera doesn't report its position over ONVIF")
             moving = any(str(getattr(move, k, "IDLE") or "IDLE").upper() not in ("IDLE", "UNKNOWN")
                          for k in ("PanTilt", "Zoom")) if move else False
             return {"pan": pos.PanTilt.x, "tilt": pos.PanTilt.y, "zoom": pos.Zoom.x, "moving": moving, "at": time.time()}

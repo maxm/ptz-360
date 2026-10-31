@@ -15,7 +15,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
@@ -28,6 +28,11 @@ from .device import PtzDevice, PtzError
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.BUTTON, Platform.CAMERA, Platform.SENSOR]
 SIGNAL_PROGRESS = f"{DOMAIN}_progress_{{}}"
+# What a camera lacks (`PtzDevice.check`), said as in the setup form.
+LACKS = {
+    "no_absolute": "This camera can't move to absolute positions over ONVIF (only by speed), which PTZ 360 needs.",
+    "no_position": "This camera doesn't report its position over ONVIF, which PTZ 360 needs.",
+}
 
 
 class PtzEntry:
@@ -131,9 +136,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: PtzConfigEntry) -> bool:
     device = PtzDevice(hass, d[CONF_HOST], d[CONF_PORT], d[CONF_USERNAME], d[CONF_PASSWORD],
                        stream_url=entry.options.get(CONF_STREAM_URL))
     try:
-        await asyncio.wait_for(device.connect(), 20)
+        lacks = await asyncio.wait_for(device.check(), 20)
     except (PtzError, TimeoutError) as err:
         raise ConfigEntryNotReady(f"{d[CONF_HOST]}: {err}") from err
+    # Added before setup checked for these: a camera that can't be used says why, instead of failing on every call.
+    if lacks:
+        await device.close()
+        raise ConfigEntryError(LACKS[lacks])
     runtime = PtzEntry(hass, entry, device)
     await runtime.load()
     entry.runtime_data = runtime
