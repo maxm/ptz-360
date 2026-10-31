@@ -288,7 +288,7 @@ uniform float aspect;
 uniform mat3 viewR; uniform float viewF; uniform vec2 viewK;
 uniform sampler2D pano; uniform bool hasPano; uniform vec4 panoLayout; uniform vec2 panoSize;
 uniform sampler2D live; uniform bool hasLive; uniform mat3 liveR; uniform float liveF; uniform vec2 liveK; uniform float liveAspect;
-uniform float grey; uniform bool liveSoft; uniform float liveAlpha; uniform bool liveDirect;
+uniform float grey; uniform bool outlines; uniform bool liveSoft; uniform float liveAlpha; uniform bool liveDirect;
 const float DEG = 57.29577951308232;
 void main() {
   vec2 sd = vec2(uv.x - 0.5, (0.5 - uv.y) * aspect);
@@ -304,6 +304,19 @@ void main() {
     if (p.x >= 0.0 && p.x <= 1.0 && p.y >= 0.0 && p.y <= 1.0) {
       vec3 t = texture(pano, p).rgb;
       c = vec4(mix(t, vec3(dot(t, vec3(0.299, 0.587, 0.114))), grey) * 0.85, 1.0);
+      if (outlines) {
+        // Only its outlines: the brightness gradient (Sobel, two of the panorama's pixels apart, past its JPEG grain),
+        // light lines on dark.
+        vec2 d = 2.0 / vec2(textureSize(pano, 0));
+        const vec3 W = vec3(0.299, 0.587, 0.114);
+        float tl = dot(texture(pano, p + d * vec2(-1, -1)).rgb, W), tc = dot(texture(pano, p + d * vec2(0, -1)).rgb, W);
+        float tr = dot(texture(pano, p + d * vec2(1, -1)).rgb, W), ml = dot(texture(pano, p + d * vec2(-1, 0)).rgb, W);
+        float mr = dot(texture(pano, p + d * vec2(1, 0)).rgb, W), bl = dot(texture(pano, p + d * vec2(-1, 1)).rgb, W);
+        float bc = dot(texture(pano, p + d * vec2(0, 1)).rgb, W), br = dot(texture(pano, p + d * vec2(1, 1)).rgb, W);
+        float gx = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl), gy = (bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr);
+        float line = smoothstep(0.25, 0.7, length(vec2(gx, gy)));
+        c = vec4(mix(vec3(0.08), mix(t, vec3(dot(t, W)), grey) * 0.6 + 0.4, line), 1.0);
+      }
     }
   }
   if (hasLive && liveDirect) {
@@ -415,7 +428,8 @@ class View {
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
-  draw(model, view, layout, live, livePose, liveAspect, grey, liveSoft, liveAlpha = 1) {
+  // `look`: how the panorama is drawn ({colour: 0 grey – 1 its own colours, outlines}).
+  draw(model, view, layout, live, livePose, liveAspect, look, liveSoft, liveAlpha = 1) {
     const gl = this.gl, p = this.prog, c = this.canvas;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, c.width, c.height);
@@ -426,7 +440,8 @@ class View {
     gl.uniformMatrix3fv(p.u.viewR, false, colMajor(model.rotation(view)));
     gl.uniform1f(p.u.viewF, model.focal(view.zoom));
     gl.uniform2f(p.u.viewK, k1, k2);
-    gl.uniform1f(p.u.grey, grey);
+    gl.uniform1f(p.u.grey, 1 - look.colour);
+    gl.uniform1i(p.u.outlines, look.outlines ? 1 : 0);
     gl.uniform1i(p.u.liveSoft, liveSoft ? 1 : 0);
     gl.uniform1f(p.u.liveAlpha, liveAlpha);
     // At rest, the view is where the live picture was taken (to rounding): the picture straight onto the screen.
@@ -579,6 +594,8 @@ const STYLE = `
   .menu { display: flex; flex-direction: column; }
   .menu button { width: auto; height: auto; padding: 8px 12px; border-radius: 8px; font: 13px system-ui, sans-serif; background: none; }
   .menu button:hover { background: rgba(255,255,255,.12); }
+  .menu .look { display: flex; align-items: center; gap: 8px; padding: 6px 12px; color: #fff; font: 13px system-ui, sans-serif; }
+  .menu .look input[type=range] { flex: 1; min-width: 100px; }
   .menu .about { padding: 6px 12px 8px; color: rgba(255,255,255,.6); font: 12px system-ui, sans-serif; max-width: 260px; }
   .notice button { width: auto; height: auto; padding: 6px 12px; border-radius: 8px; font-size: 13px; background: var(--primary-color, #03a9f4); }
 `;
@@ -619,7 +636,9 @@ class Ptz360Card extends HTMLElement {
       <canvas></canvas><video class="hidden" muted playsinline autoplay></video>
       <div class="badge">LIVE</div>
       <div class="buttons"><button class="home" title="Home">⌂</button><button class="in" title="Zoom in">+</button><button class="out" title="Zoom out">−</button><button class="more" title="More" hidden>⋯</button></div>
-      <div class="menu" hidden><button class="sethome">Set this view as home</button><button class="recalibrate">Recalibrate…</button><div class="about"></div></div>
+      <div class="menu" hidden><label class="look">Colour <input class="colour" type="range" min="0" max="1" step="0.05"></label>
+      <label class="look"><input class="outlines" type="checkbox"> Outlines only</label>
+      <button class="sethome">Set this view as home</button><button class="recalibrate">Recalibrate…</button><div class="about"></div></div>
       <div class="notice" hidden></div></div></ha-card>`;
     this.stage = root.querySelector(".stage");
     this.canvas = root.querySelector("canvas");
@@ -631,9 +650,21 @@ class Ptz360Card extends HTMLElement {
     root.querySelector(".home").onclick = () => this.goHome();
     root.querySelector(".in").onclick = () => this.zoomBy(1.6);
     root.querySelector(".out").onclick = () => this.zoomBy(1 / 1.6);
-    // Admins: recalibrate (the camera moved, or the scene changed a lot).
+    // Everyone: how the panorama looks. Admins: set home, recalibrate (the camera moved, or the scene changed a lot).
     const more = root.querySelector(".more"), menu = root.querySelector(".menu");
-    more.hidden = !this._hass.user?.is_admin;
+    const admin = !!this._hass.user?.is_admin;
+    for (const c of [".sethome", ".recalibrate"]) root.querySelector(c).hidden = !admin;
+    more.hidden = false;
+    // How the panorama looks, kept per camera in this browser: its colour (0 grey – 1 its own), or only its outlines.
+    const lookKey = `ptz-360-look-${this.config.entity}`;
+    this.look = { colour: 0.3, outlines: false };
+    try { Object.assign(this.look, JSON.parse(localStorage.getItem(lookKey)) || {}); } catch { /* the default */ }
+    const colour = root.querySelector(".colour"), outlines = root.querySelector(".outlines");
+    colour.value = this.look.colour;
+    outlines.checked = this.look.outlines;
+    const keep = () => { try { localStorage.setItem(lookKey, JSON.stringify(this.look)); } catch { /* not kept */ } };
+    colour.oninput = () => { this.look.colour = +colour.value; keep(); };
+    outlines.onchange = () => { this.look.outlines = outlines.checked; keep(); };
     more.onclick = () => {
       menu.hidden = !menu.hidden;
       // What a bug report needs: where the picture comes from.
@@ -791,7 +822,7 @@ class Ptz360Card extends HTMLElement {
       if (live) this.view.setLive(this.source);
       const showLive = live || (this.following && this.liveFrame);
       // Placed by the reports (the frames too blurry to find), the moving picture is faint: the panorama carries the move.
-      this.view.draw(this.model, this.target, this.layout, showLive, this.following ? this.paintedPose : this.livePose, this.videoAspect(), 0.7, !live,
+      this.view.draw(this.model, this.target, this.layout, showLive, this.following ? this.paintedPose : this.livePose, this.videoAspect(), this.look, !live,
         this.following && this.byReports ? 0.35 : 1);
       this.badge.textContent = this.following ? "FOLLOWING" : live ? "LIVE" : "CONNECTING";
     };
@@ -959,7 +990,7 @@ class Ptz360Card extends HTMLElement {
     let last = null, pinch = null;
     const stage = this.stage;
     stage.addEventListener("pointerdown", (e) => {
-      if (e.target.closest("button")) return;
+      if (e.target.closest("button, .menu")) return;
       stage.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, [e.clientX, e.clientY]);
       stage.classList.add("dragging");
