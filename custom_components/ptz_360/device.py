@@ -39,8 +39,6 @@ class PtzDevice:
         self._token: str | None = None
         self.ranges: dict[str, list[float]] = {"pan": [-1.0, 1.0], "tilt": [-1.0, 1.0], "zoom": [0.0, 1.0]}
         self.info: dict[str, str] = {}
-        # Whether it moves to absolute positions, from its PTZ node (None: it didn't say).
-        self.absolute: bool | None = None
         # A stream address set in the options, else the one the camera names over ONVIF.
         self._stream_uri: str | None = stream_url or None
         self._snapshot_uri: str | None = None
@@ -49,16 +47,20 @@ class PtzDevice:
         """Connects (or reuses the connection); raises PtzError when the camera can't be reached or can't pan."""
         await self._services()
 
-    async def check(self) -> str | None:
-        """What this camera lacks for PTZ 360 (`no_absolute`, `no_position`), or None: it must move to absolute
-        positions and report where it is. Doesn't move it."""
-        await self._services()
-        if self.absolute is False:
-            return "no_absolute"
+    async def check(self, move: bool = True) -> str | None:
+        """What this camera lacks for PTZ 360 (`no_position`, `no_absolute`), or None: it must report where it is
+        and move to absolute positions. Moves are tried (with `move`), not read from the spaces it lists (some list
+        absolute moves on another node, or not at all, and take them): a move to where it is, so it stays put."""
         try:
-            await self.status()
+            s = await self.status()
         except NoPosition:
             return "no_position"
+        if not move:
+            return None
+        try:
+            await self.goto(s["pan"], s["tilt"], s["zoom"])
+        except PtzError:
+            return "no_absolute"
         return None
 
     async def _services(self):
@@ -86,11 +88,14 @@ class PtzDevice:
                 except Exception:  # noqa: BLE001  (not known: the generic spaces are the default)
                     nodes = None
                 if nodes:
-                    spaces = nodes[0].SupportedPTZSpaces
+                    # The ranges of the node the profile pans with, else of one that lists absolute positions.
+                    node_token = getattr(profile.PTZConfiguration, "NodeToken", None) if getattr(profile, "PTZConfiguration", None) else None
+                    absolute = lambda n: n.SupportedPTZSpaces and n.SupportedPTZSpaces.AbsolutePanTiltPositionSpace  # noqa: E731
+                    node = next((n for n in nodes if node_token and getattr(n, "token", None) == node_token), None) \
+                        or next((n for n in nodes if absolute(n)), nodes[0])
+                    spaces = node.SupportedPTZSpaces
                     pts = spaces.AbsolutePanTiltPositionSpace if spaces else None
                     zs = spaces.AbsoluteZoomPositionSpace if spaces else None
-                    # Listing its spaces without absolute ones: the camera only moves by speed.
-                    self.absolute = bool(pts)
                     if pts:
                         self.ranges = {**self.ranges, "pan": [pts[0].XRange.Min, pts[0].XRange.Max],
                                        "tilt": [pts[0].YRange.Min, pts[0].YRange.Max]}

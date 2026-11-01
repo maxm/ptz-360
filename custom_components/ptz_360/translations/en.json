@@ -14,7 +14,7 @@
     },
     "error": {
       "cannot_connect": "Couldn't reach the camera over ONVIF, or it can't pan / tilt / zoom.",
-      "no_absolute": "This camera can't move to absolute positions over ONVIF (only by speed), which PTZ 360 needs.",
+      "no_absolute": "This camera didn't accept a move to an absolute position over ONVIF, which PTZ 360 needs.",
       "no_position": "This camera doesn't report its position over ONVIF, which PTZ 360 needs."
     },
     "abort": {

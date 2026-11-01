@@ -30,7 +30,7 @@ PLATFORMS = [Platform.BUTTON, Platform.CAMERA, Platform.SENSOR]
 SIGNAL_PROGRESS = f"{DOMAIN}_progress_{{}}"
 # What a camera lacks (`PtzDevice.check`), said as in the setup form.
 LACKS = {
-    "no_absolute": "This camera can't move to absolute positions over ONVIF (only by speed), which PTZ 360 needs.",
+    "no_absolute": "This camera didn't accept a move to an absolute position over ONVIF, which PTZ 360 needs.",
     "no_position": "This camera doesn't report its position over ONVIF, which PTZ 360 needs.",
 }
 
@@ -136,10 +136,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: PtzConfigEntry) -> bool:
     device = PtzDevice(hass, d[CONF_HOST], d[CONF_PORT], d[CONF_USERNAME], d[CONF_PASSWORD],
                        stream_url=entry.options.get(CONF_STREAM_URL))
     try:
-        lacks = await asyncio.wait_for(device.check(), 20)
+        # Its position only: a move (to where it is) would stop one under way at every start.
+        lacks = await asyncio.wait_for(device.check(move=False), 20)
     except (PtzError, TimeoutError) as err:
         raise ConfigEntryNotReady(f"{d[CONF_HOST]}: {err}") from err
-    # Added before setup checked for these: a camera that can't be used says why, instead of failing on every call.
+    # Added before setup checked for this: a camera that can't be used says why, instead of failing on every call.
     if lacks:
         await device.close()
         raise ConfigEntryError(LACKS[lacks])
