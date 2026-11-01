@@ -288,19 +288,8 @@ uniform float aspect;
 uniform mat3 viewR; uniform float viewF; uniform vec2 viewK;
 uniform sampler2D pano; uniform bool hasPano; uniform vec4 panoLayout; uniform vec2 panoSize;
 uniform sampler2D live; uniform bool hasLive; uniform mat3 liveR; uniform float liveF; uniform vec2 liveK; uniform float liveAspect;
-uniform float grey; uniform bool outlines; uniform bool liveSoft; uniform float liveAlpha; uniform bool liveDirect;
+uniform float grey; uniform bool liveSoft; uniform float liveAlpha; uniform bool liveDirect;
 const float DEG = 57.29577951308232;
-// How strong a brightness edge the panorama has at p (Sobel), in its copy at mip level L (2^L times smaller).
-float edge(vec2 p, float L) {
-  vec2 d = exp2(floor(L)) / vec2(textureSize(pano, 0));
-  const vec3 W = vec3(0.299, 0.587, 0.114);
-  float tl = dot(textureLod(pano, p + d * vec2(-1, -1), L).rgb, W), tc = dot(textureLod(pano, p + d * vec2(0, -1), L).rgb, W);
-  float tr = dot(textureLod(pano, p + d * vec2(1, -1), L).rgb, W), ml = dot(textureLod(pano, p + d * vec2(-1, 0), L).rgb, W);
-  float mr = dot(textureLod(pano, p + d * vec2(1, 0), L).rgb, W), bl = dot(textureLod(pano, p + d * vec2(-1, 1), L).rgb, W);
-  float bc = dot(textureLod(pano, p + d * vec2(0, 1), L).rgb, W), br = dot(textureLod(pano, p + d * vec2(1, 1), L).rgb, W);
-  float gx = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl), gy = (bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr);
-  return length(vec2(gx, gy));
-}
 void main() {
   vec2 sd = vec2(uv.x - 0.5, (0.5 - uv.y) * aspect);
   vec2 s = sd;
@@ -315,15 +304,6 @@ void main() {
     if (p.x >= 0.0 && p.x <= 1.0 && p.y >= 0.0 && p.y <= 1.0) {
       vec3 t = texture(pano, p).rgb;
       c = vec4(mix(t, vec3(dot(t, vec3(0.299, 0.587, 0.114))), grey) * 0.85, 1.0);
-      if (outlines) {
-        // Only its outlines, light lines on dark: where it's sharp (thin lines, at about a screen pixel), and only
-        // where a copy blurred to a quarter of its size has an edge too, so leaves and grass (detail a few of its
-        // pixels across) fade and the shapes of things stay. Zoomed out further, both by as much again.
-        vec2 size = vec2(textureSize(pano, 0));
-        float scale = max(0.0, log2(max(fwidth(p.x * size.x), fwidth(p.y * size.y))));
-        float line = smoothstep(0.15, 0.45, edge(p, min(scale, 4.0))) * smoothstep(0.25, 0.5, edge(p, clamp(scale + 1.5, 2.0, 5.0)));
-        c = vec4(mix(vec3(0.08), mix(t, vec3(dot(t, vec3(0.299, 0.587, 0.114))), grey) * 0.6 + 0.4, line), 1.0);
-      }
     }
   }
   if (hasLive && liveDirect) {
@@ -411,9 +391,6 @@ class View {
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.panoTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-    // Its smaller copies too: outlines are found in a blurred one (see the shader), and zoomed out it's smoother.
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    gl.generateMipmap(gl.TEXTURE_2D);
     this.panoSize = [source.width, source.height];
     this.hasPano = true;
   }
@@ -438,7 +415,7 @@ class View {
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
-  // `look`: how the panorama is drawn ({colour: 0 grey – 1 its own colours, outlines}).
+  // `look`: how the panorama is drawn ({colour: 0 grey – 1 its own colours}).
   draw(model, view, layout, live, livePose, liveAspect, look, liveSoft, liveAlpha = 1) {
     const gl = this.gl, p = this.prog, c = this.canvas;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -451,7 +428,6 @@ class View {
     gl.uniform1f(p.u.viewF, model.focal(view.zoom));
     gl.uniform2f(p.u.viewK, k1, k2);
     gl.uniform1f(p.u.grey, 1 - look.colour);
-    gl.uniform1i(p.u.outlines, look.outlines ? 1 : 0);
     gl.uniform1i(p.u.liveSoft, liveSoft ? 1 : 0);
     gl.uniform1f(p.u.liveAlpha, liveAlpha);
     // At rest, the view is where the live picture was taken (to rounding): the picture straight onto the screen.
@@ -504,8 +480,6 @@ class View {
     }
     gl.disable(gl.BLEND);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.bindTexture(gl.TEXTURE_2D, this.panoTex);
-    gl.generateMipmap(gl.TEXTURE_2D);
   }
   // The panorama texture's pixels, as a canvas (to keep it).
   readPanorama() {
@@ -649,7 +623,6 @@ class Ptz360Card extends HTMLElement {
       <div class="badge">LIVE</div>
       <div class="buttons"><button class="home" title="Home">⌂</button><button class="in" title="Zoom in">+</button><button class="out" title="Zoom out">−</button><button class="more" title="More" hidden>⋯</button></div>
       <div class="menu" hidden><label class="look">Colour <input class="colour" type="range" min="0" max="1" step="0.05"></label>
-      <label class="look"><input class="outlines" type="checkbox"> Outlines only</label>
       <button class="sethome">Set this view as home</button><button class="recalibrate">Recalibrate…</button><div class="about"></div></div>
       <div class="notice" hidden></div></div></ha-card>`;
     this.stage = root.querySelector(".stage");
@@ -667,16 +640,14 @@ class Ptz360Card extends HTMLElement {
     const admin = !!this._hass.user?.is_admin;
     for (const c of [".sethome", ".recalibrate"]) root.querySelector(c).hidden = !admin;
     more.hidden = false;
-    // How the panorama looks, kept per camera in this browser: its colour (0 grey – 1 its own), or only its outlines.
+    // How the panorama looks, kept per camera in this browser: its colour (0 grey – 1 its own).
     const lookKey = `ptz-360-look-${this.config.entity}`;
-    this.look = { colour: 0.3, outlines: false };
-    try { Object.assign(this.look, JSON.parse(localStorage.getItem(lookKey)) || {}); } catch { /* the default */ }
-    const colour = root.querySelector(".colour"), outlines = root.querySelector(".outlines");
+    this.look = { colour: 0.3 };
+    try { this.look.colour = JSON.parse(localStorage.getItem(lookKey))?.colour ?? this.look.colour; } catch { /* the default */ }
+    const colour = root.querySelector(".colour");
     colour.value = this.look.colour;
-    outlines.checked = this.look.outlines;
     const keep = () => { try { localStorage.setItem(lookKey, JSON.stringify(this.look)); } catch { /* not kept */ } };
     colour.oninput = () => { this.look.colour = +colour.value; keep(); };
-    outlines.onchange = () => { this.look.outlines = outlines.checked; keep(); };
     more.onclick = () => {
       menu.hidden = !menu.hidden;
       // What a bug report needs: where the picture comes from.
