@@ -28,8 +28,29 @@ https://github.com/user-attachments/assets/5eab2ef0-d4ce-439b-9e58-cf69aaf8f102
    entity: camera.your_camera
    ```
 
-4. The card offers to **Calibrate** (admins only). Let it run; the camera comes back to where it was. To run it again later, use the ⋯ menu in the card, or the camera's **Calibrate** button (Settings → Devices). The **Calibration** sensor shows how it's going.
-5. Optionally, ⋯ → **Set this view as home**: the home button goes there. Until you set one, it goes to the camera's own ONVIF home position.
+4. The card offers to **Calibrate** (admins only). Let it run; the camera comes back to where it was. To run it again later, use **Recalibrate…** in the card's editor, or the camera's **Calibrate** button (Settings → Devices). The **Calibration** sensor shows how it's going.
+
+### Card settings
+
+Everything else is in the card's editor (edit the dashboard, then the card). Turn the preview to a view first, then:
+
+- **Presets:** **Add the current view** adds a button under the picture that goes there. Each preset can be renamed, moved to the current view, reordered or removed.
+- **Set home to the current view:** the ⌂ button goes there. Until you set one, it goes to the camera's own ONVIF home position. Home belongs to the camera, so it's the same on every dashboard.
+- **Panorama colour:** from 0 (the panorama in grey, so the live picture stands out) to 1 (its own colours).
+- **Video from:** another camera entity to play the video from, for this card only (see below).
+
+In YAML:
+
+```yaml
+type: custom:ptz-360-card
+entity: camera.your_camera
+colour: 0.3
+presets:
+  - name: Gate
+    pan: -0.133
+    tilt: 0.5339
+    zoom: 0.04
+```
 
 ### Video
 
@@ -41,7 +62,7 @@ PTZ 360 has only been tried on one camera so far, so reports from any other came
 
 - the camera's make and model, and your Home Assistant version;
 - whether calibration finished, and its fit (the **Calibration** sensor's `fit_rms` attribute, in pixels; well under 1 is good);
-- where you used the card (desktop, the Home Assistant app on iPhone or Android, a phone browser) and which video it played (the card's ⋯ menu says WebRTC or MJPEG);
+- where you used the card (desktop, the Home Assistant app on iPhone or Android, a phone browser) and which video it played (hover over the card's LIVE badge: it says WebRTC or MJPEG);
 - how well the live picture lands where the view is after a pan or a zoom. A short screen recording helps a lot.
 
 Before you start:

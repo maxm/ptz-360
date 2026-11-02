@@ -563,6 +563,8 @@ const median = (samples) => {
   const mid = (v) => { const s = [...v].sort((a, b) => a - b), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
   return [mid(samples.map((x) => x[0])), mid(samples.map((x) => x[1]))];
 };
+// The panorama's colour (the card's `colour`): 0 grey – 1 its own colours.
+const colourOf = (config) => { const c = +(config.colour ?? 0.3); return Number.isFinite(c) ? Math.min(1, Math.max(0, c)) : 0.3; };
 const STYLE = `
   ha-card { overflow: hidden; }
   .stage { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #111; touch-action: none; user-select: none; cursor: grab; }
@@ -576,24 +578,29 @@ const STYLE = `
   button:active { background: rgba(0,0,0,.8); }
   .badge { position: absolute; left: 10px; top: 10px; padding: 3px 9px; border-radius: 12px; background: rgba(0,0,0,.55); color: #fff; font: 600 11px system-ui, sans-serif; letter-spacing: .04em; }
   .notice { position: absolute; inset: auto 10px 10px 10px; padding: 8px 12px; border-radius: 10px; background: rgba(0,0,0,.65); color: #fff; font: 13px system-ui, sans-serif; display: flex; gap: 10px; align-items: center; }
-  .menu { position: absolute; right: 52px; top: 136px; background: rgba(0,0,0,.75); border-radius: 10px; padding: 4px; }
-  .menu { display: flex; flex-direction: column; }
-  .menu button { width: auto; height: auto; padding: 8px 12px; border-radius: 8px; font: 13px system-ui, sans-serif; background: none; }
-  .menu button:hover { background: rgba(255,255,255,.12); }
-  .menu .look { display: flex; align-items: center; gap: 8px; padding: 6px 12px; color: #fff; font: 13px system-ui, sans-serif; }
-  .menu .look input[type=range] { flex: 1; min-width: 100px; }
-  .menu .about { padding: 6px 12px 8px; color: rgba(255,255,255,.6); font: 12px system-ui, sans-serif; max-width: 260px; }
+  .presets { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+  .presets button { width: auto; height: 32px; padding: 0 14px; border-radius: 16px; font: 500 13px system-ui, sans-serif;
+    background: var(--secondary-background-color, #eee); color: var(--primary-text-color, #222); }
+  .presets button:active { background: var(--divider-color, #ccc); }
   .notice button { width: auto; height: auto; padding: 6px 12px; border-radius: 8px; font-size: 13px; background: var(--primary-color, #03a9f4); }
 `;
 
 class Ptz360Card extends HTMLElement {
-  // What the last moves did (how frames were placed, why a picture was or wasn't painted): the ⋯ menu and the console.
+  // What the last moves did (how frames were placed, why a picture was or wasn't painted): over the badge and in the console.
   stats = {};
 
   setConfig(config) {
     if (!config || !config.entity) throw new Error("Set `entity` to a PTZ 360 camera");
+    const old = this.config;
     this.config = config;
+    if (!this.started) return;
+    // Changed in the dashboard editor while shown: another camera or video starts over; the rest takes effect.
+    if (config.entity !== old.entity || config.video_entity !== old.video_entity) { this.stop(); this.start(); return; }
+    this.look.colour = colourOf(config);
+    this.showPresets();
   }
+
+  static getConfigElement() { return document.createElement("ptz-360-card-editor"); }
 
   static getStubConfig(hass) {
     const entity = Object.keys(hass.states).find((id) => id.startsWith("camera.") && hass.states[id].attributes.ptz_360);
@@ -621,10 +628,8 @@ class Ptz360Card extends HTMLElement {
     root.innerHTML = `<style>${STYLE}</style><ha-card><div class="stage">
       <canvas></canvas><video class="hidden" muted playsinline autoplay></video>
       <div class="badge">LIVE</div>
-      <div class="buttons"><button class="home" title="Home">⌂</button><button class="in" title="Zoom in">+</button><button class="out" title="Zoom out">−</button><button class="more" title="More" hidden>⋯</button></div>
-      <div class="menu" hidden><label class="look">Colour <input class="colour" type="range" min="0" max="1" step="0.05"></label>
-      <button class="sethome">Set this view as home</button><button class="recalibrate">Recalibrate…</button><div class="about"></div></div>
-      <div class="notice" hidden></div></div></ha-card>`;
+      <div class="buttons"><button class="home" title="Home">⌂</button><button class="in" title="Zoom in">+</button><button class="out" title="Zoom out">−</button></div>
+      <div class="notice" hidden></div></div><div class="presets" hidden></div></ha-card>`;
     this.stage = root.querySelector(".stage");
     this.canvas = root.querySelector("canvas");
     this.video = root.querySelector("video");
@@ -635,39 +640,15 @@ class Ptz360Card extends HTMLElement {
     root.querySelector(".home").onclick = () => this.goHome();
     root.querySelector(".in").onclick = () => this.zoomBy(1.6);
     root.querySelector(".out").onclick = () => this.zoomBy(1 / 1.6);
-    // Everyone: how the panorama looks. Admins: set home, recalibrate (the camera moved, or the scene changed a lot).
-    const more = root.querySelector(".more"), menu = root.querySelector(".menu");
-    const admin = !!this._hass.user?.is_admin;
-    for (const c of [".sethome", ".recalibrate"]) root.querySelector(c).hidden = !admin;
-    more.hidden = false;
-    // How the panorama looks, kept per camera in this browser: its colour (0 grey – 1 its own).
-    const lookKey = `ptz-360-look-${this.config.entity}`;
-    this.look = { colour: 0.3 };
-    try { this.look.colour = JSON.parse(localStorage.getItem(lookKey))?.colour ?? this.look.colour; } catch { /* the default */ }
-    const colour = root.querySelector(".colour");
-    colour.value = this.look.colour;
-    const keep = () => { try { localStorage.setItem(lookKey, JSON.stringify(this.look)); } catch { /* not kept */ } };
-    colour.oninput = () => { this.look.colour = +colour.value; keep(); };
-    more.onclick = () => {
-      menu.hidden = !menu.hidden;
-      // What a bug report needs: where the picture comes from.
-      const video = !this.sourceReady() ? "connecting" : this.img ? "MJPEG" : "WebRTC";
-      const st = this.stats;
-      menu.querySelector(".about").textContent = `Video: ${video}${this.videoEntity !== this.entity ? ` from ${this.videoEntity}` : ""}${st.infrared ? " (infrared)" : ""}`
-        + ` · ${Math.round(this.delay)} ms behind the reports · tracking ${Math.round(100 * this.confidence)}%`
-        + (st.mode ? ` · last move: ${st.byFrames} frames found, ${st.byReports} by the reports, live view at the ${st.settledAt}` : "")
-        + (st.repaint ? ` · ${st.repaint}` : "");
-    };
-    root.querySelector(".sethome").onclick = async () => {
-      menu.hidden = true;
-      // Where the camera is now (its reported pose): home from now on, for everyone.
-      try { this.info.home = await this._hass.callWS({ type: "ptz_360/set_home", entity_id: this.entity }); this.say("Home set to this view."); setTimeout(() => this.say(""), 2500); }
-      catch (err) { this.say(`Set home: ${err.message || err}`); }
-    };
-    root.querySelector(".recalibrate").onclick = () => {
-      menu.hidden = true;
-      if (confirm("Recalibrate? The camera moves around its whole range for several minutes, then comes back.")) this.calibrate();
-    };
+    // How the panorama looks (the card's `colour`: 0 grey – 1 its own colours), and the presets under it.
+    this.look = { colour: colourOf(this.config) };
+    this.presetBar = root.querySelector(".presets");
+    this.showPresets();
+    // What a bug report needs (where the picture comes from, how the last move went): over the badge.
+    this.badge.onpointerenter = () => { this.badge.title = this.about(); };
+    // Home set in the dashboard editor: every card of this camera on the page goes there from now on.
+    this.onHomeSet = (e) => { if (e.detail.entity === this.config.entity && this.info) this.info.home = e.detail.home; };
+    window.addEventListener("ptz-360-home", this.onHomeSet);
     this.entity = this.config.entity;
     for (let attempt = 0; ; attempt++) {
       try {
@@ -699,6 +680,7 @@ class Ptz360Card extends HTMLElement {
   stop() {
     this.alive = false;
     this.started = false;
+    window.removeEventListener("ptz-360-home", this.onHomeSet);
     this.pc?.close();
     this.unsubscribe?.then((u) => u()).catch(() => {});
     this.progressSub?.then((u) => u()).catch(() => {});
@@ -717,9 +699,31 @@ class Ptz360Card extends HTMLElement {
     }
   }
 
+  about() {
+    const video = !this.sourceReady?.() ? "connecting" : this.img ? "MJPEG" : "WebRTC";
+    const st = this.stats;
+    return `Video: ${video}${this.videoEntity !== this.entity ? ` from ${this.videoEntity}` : ""}${st.infrared ? " (infrared)" : ""}`
+      + ` · ${Math.round(this.delay ?? 0)} ms behind the reports · tracking ${Math.round(100 * (this.confidence ?? 0))}%`
+      + (st.mode ? ` · last move: ${st.byFrames} frames found, ${st.byReports} by the reports, live view at the ${st.settledAt}` : "")
+      + (st.repaint ? ` · ${st.repaint}` : "");
+  }
+
+  // The card's presets (`presets`: [{name, pan, tilt, zoom}], set in the dashboard editor), a button each under the picture.
+  showPresets() {
+    const presets = (this.config.presets || []).filter((p) => p && Number.isFinite(+p.pan) && Number.isFinite(+p.tilt));
+    this.presetBar.hidden = this.plain || !presets.length;
+    this.presetBar.replaceChildren(...presets.map((p, i) => {
+      const b = document.createElement("button");
+      b.textContent = p.name || `Preset ${i + 1}`;
+      b.onclick = () => this.goTo({ pan: +p.pan, tilt: +p.tilt, zoom: +(p.zoom ?? 0) });
+      return b;
+    }));
+  }
+
   // Without a calibration: the plain video, and (for admins) the calibration pass.
   plainVideo() {
     this.plain = true;
+    this.presetBar.hidden = true;
     this.source.className = "plain";
     this.canvas.hidden = true;
     this.stage.style.cursor = "default";
@@ -778,7 +782,7 @@ class Ptz360Card extends HTMLElement {
     try { localStorage.removeItem(`ptz-360-offset-${this.entity}`); } catch { /* fine */ }
     this.offset = { pitch: {}, yaw: {} };
     // Following: how sure the frames are (0–1), placing them by the reports when they aren't, the video's delay
-    // behind the reports (ms), and how sharp the last still picture was. What happened, for the ⋯ menu and the console.
+    // behind the reports (ms), and how sharp the last still picture was. What happened, over the badge and in the console.
     this.confidence = 1;
     this.byReports = false;
     this.delay = 300;
@@ -973,7 +977,7 @@ class Ptz360Card extends HTMLElement {
     let last = null, pinch = null;
     const stage = this.stage;
     stage.addEventListener("pointerdown", (e) => {
-      if (e.target.closest("button, .menu")) return;
+      if (e.target.closest("button")) return;
       stage.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, [e.clientX, e.clientY]);
       stage.classList.add("dragging");
@@ -1374,14 +1378,21 @@ class Ptz360Card extends HTMLElement {
     step();
   }
 
-  // Home: the view eases there (longer the further it goes, at most a second); the camera is sent there once.
+  // Home: the pose set as home, else the camera's own home position (asked once).
   async goHome() {
     if (!this.model) return;
     let home = this.info.home;
     if (!home) {
       try { home = await this._hass.callWS({ type: "ptz_360/home", entity_id: this.entity }); this.info.home = home; } catch { return; }
     }
-    const m = this.model, start = this.target, goal = this.picture(home, home.pan >= start.pan ? 1 : -1);
+    this.goTo(home);
+  }
+
+  // A reported pose (home, a preset): the view eases there (longer the further it goes, at most a second); the camera
+  // is sent there once.
+  goTo(pose) {
+    if (!this.model) return;
+    const m = this.model, start = this.target, goal = this.picture(pose, pose.pan >= start.pan ? 1 : -1);
     const end = this.wraps ? { ...goal, pan: this.unwrap(goal.pan, start.pan) } : goal;
     const span = Math.max(m.degreesBetween(start, end) / m.viewHfov(start.zoom), Math.abs(Math.log(m.focal(end.zoom) / m.focal(start.zoom))) / Math.log(2));
     const duration = Math.min(1000, Math.max(350, 350 + span * 200)), began = Date.now();
@@ -1401,6 +1412,139 @@ class Ptz360Card extends HTMLElement {
   }
 }
 
+// The card's settings in the dashboard editor: the camera, where its video comes from, the panorama's colour, the
+// presets (each the camera's current view when added), and the camera's home and calibration (kept by the integration).
+const EDITOR_SCHEMA = [
+  { name: "entity", required: true, selector: { entity: { filter: { integration: "ptz_360", domain: "camera" } } } },
+  { name: "video_entity", selector: { entity: { filter: { domain: "camera" } } } },
+  { name: "colour", selector: { number: { min: 0, max: 1, step: 0.05, mode: "slider" } } },
+];
+const EDITOR_LABELS = { entity: "Camera", video_entity: "Video from (optional)", colour: "Panorama colour" };
+const EDITOR_HELP = {
+  video_entity: "Another camera entity of the same camera to play the video from, say Frigate's. Empty: the integration's.",
+  colour: "0 draws the panorama grey, 1 in its own colours.",
+};
+const EDITOR_STYLE = `
+  h3 { margin: 24px 0 4px; font: 500 16px var(--ha-font-family-body, system-ui, sans-serif); color: var(--primary-text-color); }
+  p { margin: 0 0 10px; color: var(--secondary-text-color); font-size: 13px; line-height: 1.4; }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  input { flex: 1; min-width: 0; height: 36px; padding: 0 10px; border-radius: 6px; font: inherit; font-size: 14px;
+    border: 1px solid var(--divider-color, #ccc); background: var(--card-background-color, #fff); color: var(--primary-text-color); }
+  button { height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid var(--divider-color, #ccc); cursor: pointer;
+    background: none; color: var(--primary-color, #03a9f4); font: 500 14px var(--ha-font-family-body, system-ui, sans-serif); white-space: nowrap; }
+  button.icon { width: 36px; padding: 0; color: var(--secondary-text-color); }
+  button:disabled { opacity: .5; cursor: default; }
+  .status { min-height: 18px; color: var(--secondary-text-color); font-size: 13px; }
+`;
+
+// ha-form is the frontend's own, loaded with a built-in card's editor: the tile card's, when no editor was opened yet.
+const loadForm = async () => {
+  if (customElements.get("ha-form")) return;
+  try {
+    const card = await (await window.loadCardHelpers?.())?.createCardElement({ type: "tile", entity: "sun.sun" });
+    await card?.constructor.getConfigElement?.();
+  } catch { /* the form then appears once defined */ }
+};
+
+class Ptz360CardEditor extends HTMLElement {
+  set hass(hass) {
+    this._hass = hass;
+    if (this.form) this.form.hass = hass;
+  }
+
+  setConfig(config) {
+    this.config = config;
+    if (!this.form) this.build();
+    this.form.data = { colour: 0.3, ...config };
+    // Not while a preset's name is typed (the config comes back here with every change made below).
+    if (JSON.stringify(config.presets || []) !== this.shown) this.showPresets();
+  }
+
+  build() {
+    const root = this.attachShadow({ mode: "open" });
+    root.innerHTML = `<style>${EDITOR_STYLE}</style><ha-form></ha-form>
+      <h3>Presets</h3><p>Buttons under the picture. Turn the preview to a view, then add it (or move a preset to it).</p>
+      <div class="presets"></div><button class="add">Add the current view</button>
+      <h3>Camera</h3><p>Kept by the integration, for every dashboard.</p>
+      <div class="row"><button class="sethome">Set home to the current view</button><button class="recalibrate">Recalibrate…</button></div>
+      <div class="status"></div>`;
+    this.form = root.querySelector("ha-form");
+    Object.assign(this.form, { schema: EDITOR_SCHEMA, hass: this._hass,
+      computeLabel: (s) => EDITOR_LABELS[s.name] || s.name, computeHelper: (s) => EDITOR_HELP[s.name] });
+    this.form.addEventListener("value-changed", (e) => {
+      const config = { ...this.config, ...e.detail.value };
+      if (!config.video_entity) delete config.video_entity;
+      this.changed(config);
+    });
+    loadForm();
+    this.list = root.querySelector(".presets");
+    this.status = root.querySelector(".status");
+    root.querySelector(".add").onclick = () => this.withPose("Adding", (pose) => {
+      const presets = this.config.presets || [];
+      this.changed({ ...this.config, presets: [...presets, { name: `Preset ${presets.length + 1}`, ...pose }] });
+    });
+    root.querySelector(".sethome").onclick = () => this.run("Setting home", async () => {
+      const home = await this._hass.callWS({ type: "ptz_360/set_home", entity_id: this.config.entity });
+      window.dispatchEvent(new CustomEvent("ptz-360-home", { detail: { entity: this.config.entity, home } }));
+      return "Home set to the current view.";
+    });
+    root.querySelector(".recalibrate").onclick = () => {
+      if (!confirm("Recalibrate? The camera moves around its whole range for several minutes, then comes back.")) return;
+      this.run("Starting the calibration", async () => {
+        await this._hass.callWS({ type: "ptz_360/calibrate", entity_id: this.config.entity });
+        return "Calibrating: the preview shows how it goes.";
+      });
+    };
+  }
+
+  showPresets() {
+    const presets = this.config.presets || [];
+    this.shown = JSON.stringify(presets);
+    const update = (i, change) => this.changed({ ...this.config, presets: presets.map((p, j) => (j === i ? { ...p, ...change } : p)) });
+    this.list.replaceChildren(...presets.map((p, i) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      const name = Object.assign(document.createElement("input"), { value: p.name ?? "", placeholder: `Preset ${i + 1}` });
+      name.onchange = () => update(i, { name: name.value });
+      const button = (text, title, run, cls) => Object.assign(document.createElement("button"), { textContent: text, title, onclick: run, className: cls || "" });
+      row.append(name,
+        button("Move here", "Set this preset to the current view", () => this.withPose("Moving the preset", (pose) => update(i, pose))),
+        button("↑", "Earlier", () => i && this.changed({ ...this.config, presets: presets.map((q, j) => presets[j === i - 1 ? i : j === i ? i - 1 : j]) }), "icon"),
+        button("✕", "Remove", () => {
+          const rest = presets.filter((_, j) => j !== i);
+          const config = { ...this.config, presets: rest };
+          if (!rest.length) delete config.presets;
+          this.changed(config);
+        }, "icon"));
+      return row;
+    }));
+  }
+
+  // Where the camera is now (its reported pose, as home is): the view the preview was turned to.
+  withPose(doing, use) {
+    return this.run(doing, async () => {
+      const s = await this._hass.callWS({ type: "ptz_360/status", entity_id: this.config.entity });
+      const round = (v) => Math.round(v * 1e4) / 1e4;
+      use({ pan: round(s.pan), tilt: round(s.tilt), zoom: round(s.zoom) });
+      return "";
+    });
+  }
+
+  async run(doing, fn) {
+    const buttons = this.shadowRoot.querySelectorAll("button");
+    for (const b of buttons) b.disabled = true;
+    this.status.textContent = `${doing}…`;
+    try { this.status.textContent = await fn(); }
+    catch (err) { this.status.textContent = `${doing}: ${err.message || err}`; }
+    finally { for (const b of buttons) b.disabled = false; }
+  }
+
+  changed(config) {
+    this.config = config;
+    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config }, bubbles: true, composed: true }));
+  }
+}
+
 // The integration adds this script to the page, and it can run before Home Assistant's frontend swaps in its own
 // element registry (a scoped-registry polyfill), which doesn't know elements defined before it: the dashboard then
 // says "Custom element doesn't exist". So it's defined only once the frontend's own `home-assistant` element is (the
@@ -1408,6 +1552,7 @@ class Ptz360Card extends HTMLElement {
 const register = () => {
   if (!customElements.get("home-assistant")) return false;
   if (!customElements.get("ptz-360-card")) customElements.define("ptz-360-card", Ptz360Card);
+  if (!customElements.get("ptz-360-card-editor")) customElements.define("ptz-360-card-editor", Ptz360CardEditor);
   return true;
 };
 if (!register()) {
