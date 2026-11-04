@@ -124,6 +124,11 @@ class Calibration:
         except Exception as err:
             self.progress = {"stage": "error", "error": str(err) or type(err).__name__, "at": time.time()}
             self._on_progress(self.progress)
+            # A camera that takes a move to a position as one in a direction keeps turning: stopped first.
+            try:
+                await dev.stop()
+            except PtzError:
+                pass
             raise
         finally:
             try:
@@ -143,13 +148,19 @@ class Calibration:
             for axis in ("pan", "tilt"):
                 # Zooming in narrows the frame: start small, grow while the picture barely moves.
                 step = NUDGE_FRAMES * abs(frames[axis]) / (1 if k == 0 else 2.5)
-                for _attempt in range(6):
+                for attempt in range(6):
                     await dev.goto(p0, t0, z)
-                    await dev.settle()
+                    there = await dev.settle()
                     before = await dev.snapshot()
                     await dev.goto(p0 + (step if axis == "pan" else 0), t0 + (step if axis == "tilt" else 0), z)
-                    await dev.settle()
+                    moved_to = await dev.settle()
                     after = await dev.snapshot()
+                    # The first nudge is a few hundredths of the range, which any camera reports: one that reports the
+                    # same position after it (some report 0, 0, 0 whatever they do) doesn't say where it is.
+                    if k == 0 and attempt == 0 and all(abs(moved_to[a] - there[a]) < 1e-6 for a in ("pan", "tilt", "zoom")):
+                        raise PtzError(f"the camera reported the same position (pan {there['pan']:g}, tilt {there['tilt']:g}, "
+                                       f"zoom {there['zoom']:g}) after a move, so it doesn't say where it is over ONVIF, "
+                                       "which PTZ 360 needs")
                     dx, dy, clarity = await self.hass.async_add_executor_job(_shift, before, after)
                     moved = dx if axis == "pan" else dy
                     _LOGGER.debug("nudge zoom %.2f %s step %.4f: moved %.3f frames (clarity %.1f)", z, axis, step, moved, clarity)
